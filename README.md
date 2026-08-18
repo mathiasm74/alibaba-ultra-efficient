@@ -11,6 +11,9 @@ Tampermonkey userscripts that clean up search results:
 Both share the same engine. Since these sites expose no sorting or filtering
 through URL parameters anymore, everything works client-side on the rendered page.
 
+![The control panel filtering an AliExpress image search: 3 of 60 results kept
+by required words, the rest dimmed](screenshot.png)
+
 ## Features
 
 - **Relevance filter** — hides (or dims) results whose titles don't contain enough
