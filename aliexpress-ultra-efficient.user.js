@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AliExpress Ultra Efficient 2
 // @namespace    mathias.aliexpress.ultra
-// @version      1.2
+// @version      1.3
 // @description  Filter out irrelevant AliExpress search results, hide sponsored items and duplicates, and sort results by price (client-side). A modern rebuild of the classic "AliExpress Ultra Efficient".
 // @homepageURL  https://github.com/mathiasm74/alibaba-ultra-efficient
 // @supportURL   https://github.com/mathiasm74/alibaba-ultra-efficient/issues
@@ -194,7 +194,16 @@
       if (link.closest('header, nav')) continue;
       const card = cardFromLink(link, productId(link.href));
       if (!card || card === document.body) continue;
-      if (inOverlay(card)) {
+      // Portaled overlays (e.g. the "comet-v2" preview modal) mount directly
+      // under <body> behind a bare wrapper div, so their modal classes and
+      // z-index live on the card's DESCENDANTS — invisible to the ancestor
+      // walk in inOverlay(). Real result cards are always nested deeper than
+      // <body> and never contain a modal wrapper.
+      if (
+        card.parentElement === document.body ||
+        card.querySelector('[role="dialog"], [aria-modal], [class*="modal" i]') ||
+        inOverlay(card)
+      ) {
         unstamp(card);
         continue;
       }

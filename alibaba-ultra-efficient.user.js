@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Alibaba Ultra Efficient
 // @namespace    mathias.alibaba.ultra
-// @version      1.3
+// @version      1.4
 // @description  Filter out irrelevant Alibaba search results, optionally hide sponsored items, and sort results by price (client-side). Inspired by "AliExpress Ultra Efficient".
 // @homepageURL  https://github.com/mathiasm74/alibaba-ultra-efficient
 // @supportURL   https://github.com/mathiasm74/alibaba-ultra-efficient/issues
@@ -190,7 +190,16 @@
       if (link.closest('header, nav')) continue;
       const card = cardFromLink(link, productId(link.href));
       if (!card || card === document.body) continue;
-      if (inOverlay(card)) {
+      // Portaled overlays (e.g. "comet-v2" style preview modals) mount
+      // directly under <body> behind a bare wrapper div, so their modal
+      // classes and z-index live on the card's DESCENDANTS — invisible to
+      // the ancestor walk in inOverlay(). Real result cards are always
+      // nested deeper than <body> and never contain a modal wrapper.
+      if (
+        card.parentElement === document.body ||
+        card.querySelector('[role="dialog"], [aria-modal], [class*="modal" i]') ||
+        inOverlay(card)
+      ) {
         unstamp(card);
         continue;
       }
