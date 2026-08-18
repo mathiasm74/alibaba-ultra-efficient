@@ -1,12 +1,12 @@
 // ==UserScript==
 // @name         AliExpress SuperDuper Ultra Search
 // @namespace    mathias.aliexpress.ultra
-// @version      2.0
+// @version      2.1
 // @description  Filter out irrelevant AliExpress search results, hide sponsored items and duplicates, and sort results by price (client-side). A modern rebuild of the classic "AliExpress Ultra Efficient".
 // @homepageURL  https://github.com/mathiasm74/alibaba-ultra-efficient
 // @supportURL   https://github.com/mathiasm74/alibaba-ultra-efficient/issues
-// @downloadURL  https://raw.githubusercontent.com/mathiasm74/alibaba-ultra-efficient/main/aliexpress-ultra-efficient.user.js
-// @updateURL    https://raw.githubusercontent.com/mathiasm74/alibaba-ultra-efficient/main/aliexpress-ultra-efficient.user.js
+// @downloadURL  https://raw.githubusercontent.com/mathiasm74/alibaba-ultra-efficient/main/aliexpress-superduper-ultra-search.user.js
+// @updateURL    https://raw.githubusercontent.com/mathiasm74/alibaba-ultra-efficient/main/aliexpress-superduper-ultra-search.user.js
 // @license      MIT
 // @match        https://*.aliexpress.com/w/*
 // @match        https://*.aliexpress.com/wholesale*

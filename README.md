@@ -4,7 +4,7 @@ Tampermonkey userscripts that clean up search results:
 
 - **Alibaba Ultra Efficient** (`alibaba-ultra-efficient.user.js`) — for
   Alibaba.com (`/search/page`)
-- **AliExpress SuperDuper Ultra Search** (`aliexpress-ultra-efficient.user.js`) —
+- **AliExpress SuperDuper Ultra Search** (`aliexpress-superduper-ultra-search.user.js`) —
   for AliExpress text and image search (`/w/wholesale-*`), a modern rebuild of the
   classic [AliExpress Ultra Efficient](https://greasyfork.org/en/scripts/27093-aliexpress-ultra-efficient)
 
@@ -34,7 +34,7 @@ through URL parameters anymore, everything works client-side on the rendered pag
 2. Click to install — Tampermonkey shows its install screen, and updates are
    picked up automatically from this repo:
    - [**Alibaba script**](https://raw.githubusercontent.com/mathiasm74/alibaba-ultra-efficient/main/alibaba-ultra-efficient.user.js)
-   - [**AliExpress script**](https://raw.githubusercontent.com/mathiasm74/alibaba-ultra-efficient/main/aliexpress-ultra-efficient.user.js)
+   - [**AliExpress script**](https://raw.githubusercontent.com/mathiasm74/alibaba-ultra-efficient/main/aliexpress-superduper-ultra-search.user.js)
 3. Search on the site — a control panel appears bottom-left on search result pages.
 
 ## Notes
