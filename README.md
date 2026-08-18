@@ -1,9 +1,14 @@
-# Alibaba Ultra Efficient
+# Ultra Efficient userscripts for Alibaba & AliExpress
 
-A Tampermonkey userscript that cleans up Alibaba.com search results. Inspired by
-[AliExpress Ultra Efficient](https://greasyfork.org/en/scripts/27093-aliexpress-ultra-efficient),
-but since Alibaba exposes no sorting or filtering through URL parameters, everything
-works client-side on the rendered page.
+Tampermonkey userscripts that clean up search results:
+
+- **`alibaba-ultra-efficient.user.js`** — for Alibaba.com (`/search/page`)
+- **`aliexpress-ultra-efficient.user.js`** — for AliExpress (`/w/wholesale-*`), a
+  modern rebuild of the classic
+  [AliExpress Ultra Efficient](https://greasyfork.org/en/scripts/27093-aliexpress-ultra-efficient)
+
+Both share the same engine. Since these sites expose no sorting or filtering
+through URL parameters anymore, everything works client-side on the rendered page.
 
 ## Features
 
@@ -11,8 +16,9 @@ works client-side on the rendered page.
   of your search words. Strictness is adjustable: all / most / half / any / off.
 - **Query operators** — `"quoted words"` are mandatory; `-word` and `-"a phrase"`
   are forbidden. Both override the strictness setting.
-- **Sponsored filter** — detects ad cards via Alibaba's `data-aplus-auto-normal-offer`
-  marker (with the visible "Ad" badge as fallback) and hides them.
+- **Sponsored filter** — detects ad cards via structural markers
+  (Alibaba: `data-aplus-auto-normal-offer`; AliExpress: `p4p` link tracking
+  params), with the visible "Ad" badge as fallback, and hides them.
 - **Duplicate filter** — hides repeated listings of a product that's already shown.
 - **Price sort** — optional client-side low-to-high sort. Parses localized prices
   ("US$1.20", "2 705,22 SEK"); ranges sort by their minimum. Shipping is not
@@ -24,10 +30,11 @@ works client-side on the rendered page.
 
 1. Install [Tampermonkey](https://www.tampermonkey.net/) and enable
    **Allow User Scripts** for it (`chrome://extensions` → Tampermonkey → Details).
-2. [**Click here to install the script**](https://raw.githubusercontent.com/mathiasm74/alibaba-ultra-efficient/main/alibaba-ultra-efficient.user.js)
-   — Tampermonkey will show its install screen. Updates are picked up
-   automatically from this repo.
-3. Search on Alibaba.com — the script runs on `www.alibaba.com/search/page` URLs.
+2. Click to install — Tampermonkey shows its install screen, and updates are
+   picked up automatically from this repo:
+   - [**Alibaba script**](https://raw.githubusercontent.com/mathiasm74/alibaba-ultra-efficient/main/alibaba-ultra-efficient.user.js)
+   - [**AliExpress script**](https://raw.githubusercontent.com/mathiasm74/alibaba-ultra-efficient/main/aliexpress-ultra-efficient.user.js)
+3. Search on the site — a control panel appears bottom-left on search result pages.
 
 ## Notes
 
