@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Alibaba Ultra Efficient
 // @namespace    mathias.alibaba.ultra
-// @version      1.9
+// @version      1.10
 // @description  Filter out irrelevant Alibaba search results, optionally hide sponsored items, and sort results by price (client-side). Inspired by "AliExpress Ultra Efficient".
 // @homepageURL  https://github.com/mathiasm74/alibaba-ultra-efficient
 // @supportURL   https://github.com/mathiasm74/alibaba-ultra-efficient/issues
@@ -51,10 +51,6 @@
       const v = params.get(key);
       if (v) return v;
     }
-    // Showroom/products pages encode the query in the path:
-    // /showroom/usb-c-cable.html, /products/usb_c_cable.html
-    const m = location.pathname.match(/\/(?:showroom|products)\/(.+?)\.html/);
-    if (m) return decodeURIComponent(m[1]).replace(/[-_]/g, ' ');
     // Last resort: whatever is in the search box
     const box = document.querySelector('input[name="SearchText"], input[type="search"]');
     return box ? box.value : '';
@@ -630,7 +626,7 @@
   const log = (...args) => console.info('[Alibaba Ultra Efficient]', ...args);
 
   function isSearchPage() {
-    if (/\/trade\/search|\/search\/|\/(?:showroom|products)\/.+\.html/.test(location.pathname)) return true;
+    if (/\/search\/page/.test(location.pathname)) return true;
     if (/searchtext|keyword/i.test(location.search)) return true;
     return document.querySelector(PRODUCT_LINK) !== null;
   }
