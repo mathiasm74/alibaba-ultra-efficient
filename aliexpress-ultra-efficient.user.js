@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AliExpress Ultra Efficient 2
 // @namespace    mathias.aliexpress.ultra
-// @version      1.5
+// @version      1.6
 // @description  Filter out irrelevant AliExpress search results, hide sponsored items and duplicates, and sort results by price (client-side). A modern rebuild of the classic "AliExpress Ultra Efficient".
 // @homepageURL  https://github.com/mathiasm74/alibaba-ultra-efficient
 // @supportURL   https://github.com/mathiasm74/alibaba-ultra-efficient/issues
@@ -136,11 +136,11 @@
   }
 
   // Climb from a product link to the largest ancestor that contains only
-  // links to this same product — that ancestor is the result card.
+  // links to this same product — that ancestor is the result card. Keep
+  // climbing even past a known card class: the grid slot is an OUTER
+  // per-card wrapper, and hiding an inner one leaves a hole in the grid.
   function cardFromLink(link, id) {
-    const known = link.closest(KNOWN_CARDS);
-    if (known) return known;
-    let el = link;
+    let el = link.closest(KNOWN_CARDS) || link;
     while (el.parentElement && el.parentElement !== document.body) {
       const parentLinks = el.parentElement.querySelectorAll(PRODUCT_LINK);
       let foreign = false;
@@ -184,25 +184,54 @@
     el.style.filter = '';
   }
 
+  // Locate the main results grid: the deepest element containing >=60% of
+  // all product links. Cards inside it are accepted unconditionally — the
+  // site restyles grid ancestors while scrolling (sticky/fixed toolbars,
+  // z-index changes), and judging cards by ancestor styling made every card
+  // flip to "overlay" at once, collapsing the counts to 0/0.
+  function findGrid(links) {
+    if (links.length < 3) return null;
+    const counts = new Map();
+    for (const link of links) {
+      for (let n = link.parentElement; n && n !== document.documentElement; n = n.parentElement) {
+        counts.set(n, (counts.get(n) || 0) + 1);
+      }
+    }
+    const need = Math.max(3, Math.ceil(links.length * 0.6));
+    let best = null;
+    for (const [el, c] of counts) {
+      // Qualifying elements are necessarily nested (two disjoint elements
+      // can't both hold 60% of the links), so the deepest one is the one
+      // contained by every other qualifier.
+      if (c < need) continue;
+      if (!best || best.contains(el)) best = el;
+    }
+    return best;
+  }
+
   function findCards() {
     // Multiple links of a card climb to the same element, so the Set dedupes
     // them — but a product listed twice (sponsored + organic duplicate)
     // yields two cards, each classified and counted separately.
+    const links = [...document.querySelectorAll(PRODUCT_LINK)].filter(
+      (l) => !l.closest('header, nav')
+    );
+    const grid = findGrid(links);
     const cards = new Set();
-    for (const link of document.querySelectorAll(PRODUCT_LINK)) {
-      // Skip header/nav/recommendation strips at the very top of the page
-      if (link.closest('header, nav')) continue;
+    for (const link of links) {
       const card = cardFromLink(link, productId(link.href));
       if (!card || card === document.body) continue;
-      // Portaled overlays (e.g. the "comet-v2" preview modal) mount directly
-      // under <body> behind a bare wrapper div, so their modal classes and
-      // z-index live on the card's DESCENDANTS — invisible to the ancestor
-      // walk in inOverlay(). Real result cards are always nested deeper than
-      // <body> and never contain a modal wrapper.
+      // Cards inside the results grid are always accepted. Anything else
+      // (preview modals portaled under <body>, cart sidebars, floating
+      // widgets) must prove it's not an overlay: portals mount directly
+      // under <body> behind a bare wrapper div whose modal classes live on
+      // its DESCENDANTS — invisible to the ancestor walk in inOverlay().
+      const inGrid = grid && card !== grid && grid.contains(card);
       if (
-        card.parentElement === document.body ||
-        card.querySelector('[role="dialog"], [aria-modal], [class*="modal" i]') ||
-        inOverlay(card)
+        !inGrid &&
+        (card.parentElement === document.body ||
+          card.querySelector('[role="dialog"], [aria-modal], [class*="modal" i]') ||
+          inOverlay(card))
       ) {
         unstamp(card);
         continue;
@@ -210,24 +239,7 @@
       cards.add(card);
     }
     // Drop cards that contain other cards (grid wrappers picked up by the climb)
-    const list = [...cards].filter((c) => ![...cards].some((o) => o !== c && c.contains(o)));
-    // Preview modals that aren't position:fixed still sneak past inOverlay().
-    // Structural backstop: real result cards live together in a grid, while a
-    // modal's card sits alone in its wrapper. When a grid clearly exists
-    // (some parent holds 3+ cards), drop any card that is the only one in
-    // its parent.
-    const perParent = new Map();
-    for (const c of list) {
-      perParent.set(c.parentElement, (perParent.get(c.parentElement) || 0) + 1);
-    }
-    if (Math.max(0, ...perParent.values()) >= 3) {
-      return list.filter((c) => {
-        if (perParent.get(c.parentElement) > 1) return true;
-        unstamp(c);
-        return false;
-      });
-    }
-    return list;
+    return [...cards].filter((c) => ![...cards].some((o) => o !== c && c.contains(o)));
   }
 
   function cardProductId(card) {
@@ -319,11 +331,21 @@
     return hits / queryTokens.length;
   }
 
+  // The site's re-renders can copy our data-aue-state onto a fresh node
+  // while wiping the inline styles — trusting the stamp alone then leaves
+  // "zombie" cards: counted as hidden but fully visible. Verify the styling.
+  function styleMatches(card, state) {
+    if (state === 'ok') return card.style.display !== 'none' && card.style.opacity === '';
+    if (settings.mode === 'hide') return card.style.display === 'none';
+    return card.style.opacity === '0.45';
+  }
+
   function setCardState(card, state) {
     // state: 'ok' | 'irrelevant' | 'sponsored' | 'duplicate'
-    // Skip when unchanged: since the observer watches style/class mutations,
-    // redundant style writes would re-trigger it in an endless loop.
-    if (card.dataset.aueState === state) return;
+    // Skip when unchanged AND correctly styled: since the observer watches
+    // style mutations, redundant style writes would re-trigger it in an
+    // endless loop.
+    if (card.dataset.aueState === state && styleMatches(card, state)) return;
     card.dataset.aueState = state;
     restyleCard(card, state);
   }
