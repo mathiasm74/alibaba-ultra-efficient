@@ -2,10 +2,11 @@
 
 Tampermonkey userscripts that clean up search results:
 
-- **`alibaba-ultra-efficient.user.js`** — for Alibaba.com (`/search/page`)
-- **`aliexpress-ultra-efficient.user.js`** — for AliExpress (`/w/wholesale-*`), a
-  modern rebuild of the classic
-  [AliExpress Ultra Efficient](https://greasyfork.org/en/scripts/27093-aliexpress-ultra-efficient)
+- **Alibaba Ultra Efficient** (`alibaba-ultra-efficient.user.js`) — for
+  Alibaba.com (`/search/page`)
+- **AliExpress SuperDuper Ultra Search** (`aliexpress-ultra-efficient.user.js`) —
+  for AliExpress text and image search (`/w/wholesale-*`), a modern rebuild of the
+  classic [AliExpress Ultra Efficient](https://greasyfork.org/en/scripts/27093-aliexpress-ultra-efficient)
 
 Both share the same engine. Since these sites expose no sorting or filtering
 through URL parameters anymore, everything works client-side on the rendered page.

@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         AliExpress Ultra Efficient 2
+// @name         AliExpress SuperDuper Ultra Search
 // @namespace    mathias.aliexpress.ultra
-// @version      1.18
+// @version      2.0
 // @description  Filter out irrelevant AliExpress search results, hide sponsored items and duplicates, and sort results by price (client-side). A modern rebuild of the classic "AliExpress Ultra Efficient".
 // @homepageURL  https://github.com/mathiasm74/alibaba-ultra-efficient
 // @supportURL   https://github.com/mathiasm74/alibaba-ultra-efficient/issues
@@ -468,7 +468,7 @@
         // apply() would churn the observer (and fight site re-renders).
         if (sorted.every((card, i) => card === group[i])) continue;
         for (const card of sorted) parent.appendChild(card);
-        console.debug('[AliExpress Ultra Efficient] sorted prices:',
+        console.debug('[AliExpress SuperDuper Ultra Search] sorted prices:',
           sorted.slice(0, 20).map((c) => getPrice(c)));
       }
     } finally {
@@ -497,7 +497,7 @@
       (c) => c.dataset.aueState || c.getClientRects().length > 0
     );
     if (cards.length < allCards.length) {
-      console.debug('[AliExpress Ultra Efficient]',
+      console.debug('[AliExpress SuperDuper Ultra Search]',
         `ignoring ${allCards.length - cards.length} cards the site itself hides`);
     }
 
@@ -551,11 +551,11 @@
     const changed = JSON.stringify(counts) !== JSON.stringify(lastCounts);
     lastCounts = counts;
     if (changed) {
-      console.info('[AliExpress Ultra Efficient]',
+      console.info('[AliExpress SuperDuper Ultra Search]',
         `${counts.total} cards found — ${counts.shown} shown, ${counts.filtered} off-topic, ` +
         `${counts.sponsored} ads, ${counts.duplicates} dupes, ${counts.priced} priced out`);
       if (adTitles.length) {
-        console.debug('[AliExpress Ultra Efficient] flagged as ads:', adTitles);
+        console.debug('[AliExpress SuperDuper Ultra Search] flagged as ads:', adTitles);
       }
     }
     updatePanel();
@@ -595,7 +595,7 @@
         #aue-panel #aue-min, #aue-panel #aue-max { width: 46px; }
         #aue-panel #aue-counts { color: #9ad; }
       </style>
-      <div id="aue-header"><span>AliExpress Ultra Efficient</span><span id="aue-toggle">–</span></div>
+      <div id="aue-header"><span>AliExpress SuperDuper Ultra Search</span><span id="aue-toggle">–</span></div>
       <div id="aue-counts"></div>
       <label>Match strictness
         <select id="aue-strictness">
@@ -712,7 +712,7 @@
 
   // ---------------------------------------------------------------- bootstrap
 
-  const log = (...args) => console.info('[AliExpress Ultra Efficient]', ...args);
+  const log = (...args) => console.info('[AliExpress SuperDuper Ultra Search]', ...args);
 
   function isSearchPage() {
     if (/\/w\/|\/wholesale|\/af\//.test(location.pathname)) return true;
