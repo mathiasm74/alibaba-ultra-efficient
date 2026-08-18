@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AliExpress Ultra Efficient 2
 // @namespace    mathias.aliexpress.ultra
-// @version      1.13
+// @version      1.14
 // @description  Filter out irrelevant AliExpress search results, hide sponsored items and duplicates, and sort results by price (client-side). A modern rebuild of the classic "AliExpress Ultra Efficient".
 // @homepageURL  https://github.com/mathiasm74/alibaba-ultra-efficient
 // @supportURL   https://github.com/mathiasm74/alibaba-ultra-efficient/issues
@@ -56,22 +56,37 @@
 
   // ------------------------------------------------------------ classic mode
 
-  // The 2016-era Ultra Efficient params. AliExpress may have stopped honoring
-  // some of them; applying them is harmless either way.
-  const CLASSIC_PARAMS = { g: 'n', SortType: 'price_asc', isFreeShip: 'y', isRtl: 'yes' };
+  // The modern equivalents of the 2016 Ultra Efficient params, taken from
+  // URLs the current site emits itself: g=n still works, the sort param is
+  // now lowercase sortType, and free shipping moved from isFreeShip=y to a
+  // selectedSwitches filter code. isRtl has no modern counterpart.
+  const CLASSIC_FIXED = { g: 'n', sortType: 'price_asc' };
+  const FREESHIP_SWITCH = 'filterCode:freeshipping';
+  const LEGACY_PARAMS = ['SortType', 'isFreeShip', 'isRtl'];
   const CLASSIC_GUARD = 'aue-classic-applied';
 
   function classicParamsMissing() {
     const p = new URLSearchParams(location.search);
-    return Object.entries(CLASSIC_PARAMS).some(([k, v]) => p.get(k) !== v);
+    if (Object.entries(CLASSIC_FIXED).some(([k, v]) => p.get(k) !== v)) return true;
+    return !(p.get('selectedSwitches') || '').includes(FREESHIP_SWITCH);
   }
 
   function setClassicParams(on) {
     const p = new URLSearchParams(location.search);
-    for (const [k, v] of Object.entries(CLASSIC_PARAMS)) {
-      if (on) p.set(k, v);
-      else p.delete(k);
+    for (const k of LEGACY_PARAMS) p.delete(k);
+    // selectedSwitches can hold several comma-separated filters the user
+    // enabled — add/remove only our entry, never clobber the rest.
+    const switches = (p.get('selectedSwitches') || '')
+      .split(',')
+      .filter((s) => s && s !== FREESHIP_SWITCH);
+    if (on) {
+      for (const [k, v] of Object.entries(CLASSIC_FIXED)) p.set(k, v);
+      switches.push(FREESHIP_SWITCH);
+    } else {
+      for (const k of Object.keys(CLASSIC_FIXED)) p.delete(k);
     }
+    if (switches.length) p.set('selectedSwitches', switches.join(','));
+    else p.delete('selectedSwitches');
     location.search = p.toString();
   }
 
