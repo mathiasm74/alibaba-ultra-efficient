@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AliExpress Ultra Efficient 2
 // @namespace    mathias.aliexpress.ultra
-// @version      1.0
+// @version      1.1
 // @description  Filter out irrelevant AliExpress search results, hide sponsored items and duplicates, and sort results by price (client-side). A modern rebuild of the classic "AliExpress Ultra Efficient".
 // @homepageURL  https://github.com/mathiasm74/alibaba-ultra-efficient
 // @supportURL   https://github.com/mathiasm74/alibaba-ultra-efficient/issues
@@ -153,6 +153,18 @@
     return el;
   }
 
+  // Overlays (preview/quick-view modals, floating widgets) contain product
+  // links too, but must never be treated as result cards — hiding a
+  // "duplicate" preview of a grid item would slam the modal shut. They sit
+  // in position:fixed or role=dialog containers; the results grid never does.
+  function inOverlay(el) {
+    for (let n = el; n && n !== document.body; n = n.parentElement) {
+      if (n.getAttribute('role') === 'dialog' || n.hasAttribute('aria-modal')) return true;
+      if (getComputedStyle(n).position === 'fixed') return true;
+    }
+    return false;
+  }
+
   function findCards() {
     // Multiple links of a card climb to the same element, so the Set dedupes
     // them — but a product listed twice (sponsored + organic duplicate)
@@ -162,7 +174,19 @@
       // Skip header/nav/recommendation strips at the very top of the page
       if (link.closest('header, nav')) continue;
       const card = cardFromLink(link, productId(link.href));
-      if (card && card !== document.body) cards.add(card);
+      if (!card || card === document.body) continue;
+      if (inOverlay(card)) {
+        // Un-stamp an overlay we styled before this guard existed, so a
+        // reused modal node can't stay hidden.
+        if (card.dataset.aueState) {
+          delete card.dataset.aueState;
+          card.style.display = '';
+          card.style.opacity = '';
+          card.style.filter = '';
+        }
+        continue;
+      }
+      cards.add(card);
     }
     // Drop cards that contain other cards (grid wrappers picked up by the climb)
     return [...cards].filter((c) => ![...cards].some((o) => o !== c && c.contains(o)));
