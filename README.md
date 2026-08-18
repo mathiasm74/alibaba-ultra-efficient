@@ -11,8 +11,11 @@ Tampermonkey userscripts that clean up search results:
 Both share the same engine. Since these sites expose no sorting or filtering
 through URL parameters anymore, everything works client-side on the rendered page.
 
+![The control panel on an Alibaba search: dim mode fades 59 of 60 results,
+leaving the one matching all query terms at full color](screenshot-alibaba.png)
+
 ![The control panel filtering an AliExpress image search: 3 of 60 results kept
-by required words, the rest dimmed](screenshot.png)
+by required words, the rest dimmed](screenshot-aliexpress.png)
 
 ## Features
 
