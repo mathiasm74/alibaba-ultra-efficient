@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Alibaba Ultra Efficient
 // @namespace    mathias.alibaba.ultra
-// @version      1.8
+// @version      1.9
 // @description  Filter out irrelevant Alibaba search results, optionally hide sponsored items, and sort results by price (client-side). Inspired by "AliExpress Ultra Efficient".
 // @homepageURL  https://github.com/mathiasm74/alibaba-ultra-efficient
 // @supportURL   https://github.com/mathiasm74/alibaba-ultra-efficient/issues
@@ -176,10 +176,8 @@
     if (!el.dataset.aueState) return;
     delete el.dataset.aueState;
     el.style.display = '';
-    el.style.opacity = '';
-    el.style.filter = '';
-    el.style.outline = '';
-    el.style.outlineOffset = '';
+    clearVisual(el);
+    clearVisual(visualTarget(el));
   }
 
   // Locate the main results grid: the deepest element containing >=60% of
@@ -332,13 +330,25 @@
   // The site's re-renders can copy our data-aue-state onto a fresh node
   // while wiping the inline styles — trusting the stamp alone then leaves
   // "zombie" cards: counted as hidden but fully visible. Verify the styling.
+  // Outer card wrappers can be display:contents — no box, so outline,
+  // opacity, and filter on them are silently ignored (display:none still
+  // works). Visual styling must land on the first descendant that renders.
+  function visualTarget(card) {
+    let t = card;
+    for (let i = 0; i < 5 && t.firstElementChild && getComputedStyle(t).display === 'contents'; i++) {
+      t = t.firstElementChild;
+    }
+    return t;
+  }
+
   function styleMatches(card, state) {
+    const t = visualTarget(card);
     if (state === 'ok') {
-      return card.style.display !== 'none' && card.style.opacity === '' && card.style.outline === '';
+      return card.style.display !== 'none' && t.style.opacity === '' && t.style.outline === '';
     }
     if (settings.mode === 'hide') return card.style.display === 'none';
-    if (settings.mode === 'debug') return card.style.outline !== '';
-    return card.style.opacity === '0.45';
+    if (settings.mode === 'debug') return t.style.outline !== '';
+    return t.style.opacity === '0.45';
   }
 
   function setCardState(card, state) {
@@ -357,10 +367,8 @@
     for (const card of document.querySelectorAll('[data-aue-state]')) {
       delete card.dataset.aueState;
       card.style.display = '';
-      card.style.opacity = '';
-      card.style.filter = '';
-      card.style.outline = '';
-      card.style.outlineOffset = '';
+      clearVisual(card);
+      clearVisual(visualTarget(card));
     }
   }
 
@@ -368,27 +376,31 @@
   // misclassifications identify themselves on screen.
   const DEBUG_COLORS = { sponsored: '#e5484d', irrelevant: '#f5a524', duplicate: '#9353d3' };
 
+  function clearVisual(el) {
+    el.style.opacity = '';
+    el.style.filter = '';
+    el.style.outline = '';
+    el.style.outlineOffset = '';
+  }
+
   function restyleCard(card, state) {
+    const t = visualTarget(card);
     if (state === 'ok') {
       card.style.display = '';
-      card.style.opacity = '';
-      card.style.filter = '';
-      card.style.outline = '';
-      card.style.outlineOffset = '';
+      clearVisual(card);
+      clearVisual(t);
     } else if (settings.mode === 'hide') {
       card.style.display = 'none';
     } else if (settings.mode === 'debug') {
       card.style.display = '';
-      card.style.opacity = '';
-      card.style.filter = '';
-      card.style.outline = `3px solid ${DEBUG_COLORS[state] || '#888'}`;
-      card.style.outlineOffset = '-3px';
+      clearVisual(t);
+      t.style.outline = `3px solid ${DEBUG_COLORS[state] || '#888'}`;
+      t.style.outlineOffset = '-3px';
     } else {
       card.style.display = '';
-      card.style.opacity = '0.45';
-      card.style.filter = 'grayscale(1)';
-      card.style.outline = '';
-      card.style.outlineOffset = '';
+      clearVisual(t);
+      t.style.opacity = '0.45';
+      t.style.filter = 'grayscale(1)';
     }
   }
 
