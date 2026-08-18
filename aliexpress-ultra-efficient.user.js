@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AliExpress Ultra Efficient 2
 // @namespace    mathias.aliexpress.ultra
-// @version      1.4
+// @version      1.5
 // @description  Filter out irrelevant AliExpress search results, hide sponsored items and duplicates, and sort results by price (client-side). A modern rebuild of the classic "AliExpress Ultra Efficient".
 // @homepageURL  https://github.com/mathiasm74/alibaba-ultra-efficient
 // @supportURL   https://github.com/mathiasm74/alibaba-ultra-efficient/issues
@@ -184,54 +184,25 @@
     el.style.filter = '';
   }
 
-  // Locate the main results grid: the deepest element containing >=60% of
-  // all product links. Cards inside it are accepted unconditionally — the
-  // site restyles grid ancestors while scrolling (sticky/fixed toolbars,
-  // z-index changes), and judging cards by ancestor styling made every card
-  // flip to "overlay" at once, collapsing the counts to 0/0.
-  function findGrid(links) {
-    if (links.length < 3) return null;
-    const counts = new Map();
-    for (const link of links) {
-      for (let n = link.parentElement; n && n !== document.documentElement; n = n.parentElement) {
-        counts.set(n, (counts.get(n) || 0) + 1);
-      }
-    }
-    const need = Math.max(3, Math.ceil(links.length * 0.6));
-    let best = null;
-    for (const [el, c] of counts) {
-      // Qualifying elements are necessarily nested (two disjoint elements
-      // can't both hold 60% of the links), so the deepest one is the one
-      // contained by every other qualifier.
-      if (c < need) continue;
-      if (!best || best.contains(el)) best = el;
-    }
-    return best;
-  }
-
   function findCards() {
     // Multiple links of a card climb to the same element, so the Set dedupes
     // them — but a product listed twice (sponsored + organic duplicate)
     // yields two cards, each classified and counted separately.
-    const links = [...document.querySelectorAll(PRODUCT_LINK)].filter(
-      (l) => !l.closest('header, nav')
-    );
-    const grid = findGrid(links);
     const cards = new Set();
-    for (const link of links) {
+    for (const link of document.querySelectorAll(PRODUCT_LINK)) {
+      // Skip header/nav/recommendation strips at the very top of the page
+      if (link.closest('header, nav')) continue;
       const card = cardFromLink(link, productId(link.href));
       if (!card || card === document.body) continue;
-      // Cards inside the results grid are always accepted. Anything else
-      // (preview modals portaled under <body>, cart sidebars, floating
-      // widgets) must prove it's not an overlay: portals mount directly
-      // under <body> behind a bare wrapper div whose modal classes live on
-      // its DESCENDANTS — invisible to the ancestor walk in inOverlay().
-      const inGrid = grid && card !== grid && grid.contains(card);
+      // Portaled overlays (e.g. the "comet-v2" preview modal) mount directly
+      // under <body> behind a bare wrapper div, so their modal classes and
+      // z-index live on the card's DESCENDANTS — invisible to the ancestor
+      // walk in inOverlay(). Real result cards are always nested deeper than
+      // <body> and never contain a modal wrapper.
       if (
-        !inGrid &&
-        (card.parentElement === document.body ||
-          card.querySelector('[role="dialog"], [aria-modal], [class*="modal" i]') ||
-          inOverlay(card))
+        card.parentElement === document.body ||
+        card.querySelector('[role="dialog"], [aria-modal], [class*="modal" i]') ||
+        inOverlay(card)
       ) {
         unstamp(card);
         continue;
@@ -239,7 +210,24 @@
       cards.add(card);
     }
     // Drop cards that contain other cards (grid wrappers picked up by the climb)
-    return [...cards].filter((c) => ![...cards].some((o) => o !== c && c.contains(o)));
+    const list = [...cards].filter((c) => ![...cards].some((o) => o !== c && c.contains(o)));
+    // Preview modals that aren't position:fixed still sneak past inOverlay().
+    // Structural backstop: real result cards live together in a grid, while a
+    // modal's card sits alone in its wrapper. When a grid clearly exists
+    // (some parent holds 3+ cards), drop any card that is the only one in
+    // its parent.
+    const perParent = new Map();
+    for (const c of list) {
+      perParent.set(c.parentElement, (perParent.get(c.parentElement) || 0) + 1);
+    }
+    if (Math.max(0, ...perParent.values()) >= 3) {
+      return list.filter((c) => {
+        if (perParent.get(c.parentElement) > 1) return true;
+        unstamp(c);
+        return false;
+      });
+    }
+    return list;
   }
 
   function cardProductId(card) {
