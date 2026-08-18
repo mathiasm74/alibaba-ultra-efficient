@@ -1,0 +1,544 @@
+// ==UserScript==
+// @name         Alibaba Ultra Efficient
+// @namespace    mathias.alibaba.ultra
+// @version      1.0
+// @description  Filter out irrelevant Alibaba search results, optionally hide sponsored items, and sort results by price (client-side). Inspired by "AliExpress Ultra Efficient".
+// @match        https://www.alibaba.com/search/page*
+// @match        https://*.alibaba.com/search/page*
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @run-at       document-idle
+// @noframes
+// ==/UserScript==
+
+(function () {
+  'use strict';
+
+  // ---------------------------------------------------------------- settings
+
+  const DEFAULTS = {
+    // Minimum fraction of your search words that must appear in a product
+    // title for it to be considered relevant.
+    // 'all' = 1.0, 'most' = 0.75, 'half' = 0.5, 'any' = one word, 'off' = no filtering
+    strictness: 'most',
+    // 'hide' removes irrelevant results, 'dim' greys them out instead
+    mode: 'hide',
+    hideSponsored: true,
+    sortByPrice: false,
+  };
+
+  const settings = Object.assign({}, DEFAULTS, GM_getValue('settings', {}));
+  const saveSettings = () => GM_setValue('settings', settings);
+
+  const STRICTNESS_FRACTION = { all: 1.0, most: 0.75, half: 0.5, any: 0.0001, off: 0 };
+
+  // Words in the query that carry no meaning for matching
+  const STOPWORDS = new Set([
+    'a', 'an', 'and', 'for', 'the', 'of', 'to', 'in', 'on', 'with', 'by',
+    'or', 'per', 'new', 'high', 'quality', 'hot', 'sale', 'oem', 'odm',
+  ]);
+
+  // ------------------------------------------------------------------ query
+
+  function getQueryText() {
+    const params = new URLSearchParams(location.search);
+    for (const key of ['SearchText', 'searchText', 'keyword', 'keywords', 'q']) {
+      const v = params.get(key);
+      if (v) return v;
+    }
+    // Showroom/products pages encode the query in the path:
+    // /showroom/usb-c-cable.html, /products/usb_c_cable.html
+    const m = location.pathname.match(/\/(?:showroom|products)\/(.+?)\.html/);
+    if (m) return decodeURIComponent(m[1]).replace(/[-_]/g, ' ');
+    // Last resort: whatever is in the search box
+    const box = document.querySelector('input[name="SearchText"], input[type="search"]');
+    return box ? box.value : '';
+  }
+
+  function singularize(word) {
+    if (word.length > 3 && word.endsWith('es')) return word.slice(0, -2);
+    if (word.length > 3 && word.endsWith('s')) return word.slice(0, -1);
+    return word;
+  }
+
+  function tokenize(text) {
+    return text
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length > 1 && !STOPWORDS.has(w))
+      .map(singularize);
+  }
+
+  // "quoted" words or phrases in the query are mandatory, and -negated ones
+  // (-word, -"a phrase") are forbidden: both override the strictness setting.
+  function parseQuery(text) {
+    const required = [];
+    const excluded = [];
+    let rest = text.replace(/(^|\s)-"([^"]*)"/g, (_, sp, phrase) => {
+      const p = phrase.trim().toLowerCase();
+      if (p) excluded.push(p);
+      return sp;
+    });
+    rest = rest.replace(/"([^"]*)"/g, (_, phrase) => {
+      const p = phrase.trim().toLowerCase();
+      if (p) required.push(p);
+      return ' ';
+    });
+    // (^|\s) keeps in-word hyphens intact: "usb-c" is one term, not -c negated
+    rest = rest.replace(/(^|\s)-([a-z0-9][\w-]*)/gi, (_, sp, word) => {
+      excluded.push(word.toLowerCase());
+      return sp;
+    });
+    return { required, excluded, optional: tokenize(rest) };
+  }
+
+  function hasPhrase(title, phrase) {
+    const haystack = title.toLowerCase().replace(/\s+/g, ' ');
+    if (haystack.includes(phrase)) return true;
+    // Also match ignoring punctuation/spacing ("usb c" vs "USB-C")
+    const compact = haystack.replace(/[^a-z0-9]/g, '');
+    return compact.includes(phrase.replace(/[^a-z0-9]/g, ''));
+  }
+
+  function isExcluded(title, excluded) {
+    if (!excluded.length) return false;
+    const tokens = title.toLowerCase().split(/[^a-z0-9]+/).map(singularize);
+    return excluded.some((term) =>
+      // Plain single words match whole tokens only, so -led doesn't kill
+      // "sealed"; phrases and hyphenated terms use the substring matcher.
+      /[^a-z0-9]/.test(term)
+        ? hasPhrase(title, term)
+        : tokens.includes(singularize(term))
+    );
+  }
+
+  // ----------------------------------------------------------- card scraping
+
+  const PRODUCT_LINK = 'a[href*="product-detail"], a[href*="/product/"]';
+  // Known card containers as of 2025; Alibaba renames these regularly,
+  // so cardFromLink() below is the future-proof fallback.
+  const KNOWN_CARDS = '.fy23-search-card, .fy24-search-card, .J-search-card, .m-gallery-product-item-v2';
+
+  // A card links to its product more than once (image + title), so links must
+  // be grouped by product before climbing, or each link looks like its own card.
+  function productId(href) {
+    const m = href.match(/_(\d{6,})\.html/) || href.match(/product-detail\/([^?#]+)/);
+    return m ? m[1] : href.split(/[?#]/)[0];
+  }
+
+  // Climb from a product link to the largest ancestor that contains only
+  // links to this same product — that ancestor is the result card.
+  function cardFromLink(link, id) {
+    const known = link.closest(KNOWN_CARDS);
+    if (known) return known;
+    let el = link;
+    while (el.parentElement && el.parentElement !== document.body) {
+      const parentLinks = el.parentElement.querySelectorAll(PRODUCT_LINK);
+      let foreign = false;
+      for (const l of parentLinks) {
+        if (productId(l.href) !== id) { foreign = true; break; }
+      }
+      if (foreign) break;
+      el = el.parentElement;
+    }
+    return el;
+  }
+
+  function findCards() {
+    // Both links of a card (image + title) climb to the same element, so the
+    // Set dedupes them — but a product listed twice (sponsored + organic
+    // duplicate) yields two cards, each classified and counted separately.
+    const cards = new Set();
+    for (const link of document.querySelectorAll(PRODUCT_LINK)) {
+      // Skip header/nav/recommendation strips at the very top of the page
+      if (link.closest('header, nav')) continue;
+      const card = cardFromLink(link, productId(link.href));
+      if (card && card !== document.body) cards.add(card);
+    }
+    // Drop cards that contain other cards (grid wrappers picked up by the climb)
+    return [...cards].filter((c) => ![...cards].some((o) => o !== c && c.contains(o)));
+  }
+
+  function cardProductId(card) {
+    const link = card.querySelector(PRODUCT_LINK);
+    return link ? productId(link.href) : null;
+  }
+
+  function getTitle(card) {
+    // Specific selectors first: the generic [class*="title"] can match wrapper
+    // divs (e.g. searchx-title-area) whose text includes badge junk like
+    // "certified" and "Money-back guarantee" alongside the real title.
+    const el =
+      card.querySelector('h2, .searchx-product-e-title, .search-card-e-title') ||
+      card.querySelector('[class*="title"]');
+    if (el && el.textContent.trim()) return el.textContent.trim();
+    const link = card.querySelector(PRODUCT_LINK);
+    if (link) {
+      if (link.title) return link.title;
+      const img = link.querySelector('img[alt]');
+      if (img && img.alt) return img.alt;
+      return link.textContent.trim();
+    }
+    return '';
+  }
+
+  // Parse one localized amount: "1,234.56", "2 705,22", "1.234,56" …
+  // The last . or , followed by 1-2 digits is the decimal separator; every
+  // other separator is grouping.
+  function parseAmount(str) {
+    const s = str.replace(/[\s  ]/g, '');
+    const sep = Math.max(s.lastIndexOf('.'), s.lastIndexOf(','));
+    const decimals = s.length - sep - 1;
+    let normalized;
+    if (sep >= 0 && decimals >= 1 && decimals <= 2) {
+      normalized = s.slice(0, sep).replace(/[.,]/g, '') + '.' + s.slice(sep + 1);
+    } else {
+      normalized = s.replace(/[.,]/g, '');
+    }
+    const v = parseFloat(normalized);
+    return isNaN(v) ? null : v;
+  }
+
+  const AMOUNT = '\\d(?:[\\d\\s\\u00a0\\u202f.,]*\\d)?';
+  const CURRENCY_BEFORE = new RegExp(`(?:US\\s?\\$|\\$|€|£|USD|EUR|GBP|SEK|NOK|DKK|kr)\\s*(${AMOUNT})`, 'i');
+  const CURRENCY_AFTER = new RegExp(`(${AMOUNT})\\s*(?:USD|EUR|GBP|SEK|NOK|DKK|kr|US\\s?\\$|\\$|€|£)`, 'i');
+
+  function getPrice(card) {
+    // Prices are shown in the visitor's currency ("US$1.20", "2 705,22 SEK");
+    // ranges list the minimum first, so the first amount is the sort key.
+    const el = card.querySelector('.product-price, .searchx-price-area, [class*="price"]');
+    if (el) {
+      // Inside a dedicated price element the first number IS the (min) price.
+      // Currency-adjacency matching would grab the range maximum for suffix
+      // currencies ("70,11-761,83 SEK"), so don't use it here.
+      const m = el.textContent.match(new RegExp(AMOUNT));
+      return m ? parseAmount(m[0]) : null;
+    }
+    // No price element found: only trust an amount right next to a currency
+    // marker anywhere in the card's text.
+    const m = card.textContent.match(CURRENCY_BEFORE) || card.textContent.match(CURRENCY_AFTER);
+    return m ? parseAmount(m[1]) : null;
+  }
+
+  function isSponsored(card) {
+    // Structural marker first: verified live to mirror the "Ad" badge exactly
+    // (11/11, no mismatches), and it works even in page variants where the
+    // badge text only renders on hover.
+    if (
+      card.hasAttribute('data-aplus-auto-normal-offer') ||
+      card.querySelector('[data-aplus-auto-normal-offer]')
+    ) return true;
+    for (const el of card.querySelectorAll('span, div, i, em')) {
+      const t = el.textContent.trim();
+      if (t.length <= 12 && /^(ad|ads|sponsored)$/i.test(t)) return true;
+    }
+    return false;
+  }
+
+  // -------------------------------------------------------------- filtering
+
+  function relevance(title, queryTokens) {
+    if (!queryTokens.length) return 1;
+    const haystack = title.toLowerCase();
+    const compact = haystack.replace(/[^a-z0-9]/g, '');
+    let hits = 0;
+    for (const tok of queryTokens) {
+      if (haystack.includes(tok) || compact.includes(tok)) hits++;
+    }
+    return hits / queryTokens.length;
+  }
+
+  function setCardState(card, state) {
+    // state: 'ok' | 'irrelevant' | 'sponsored' | 'duplicate'
+    // Skip when unchanged: since the observer watches style/class mutations,
+    // redundant style writes would re-trigger it in an endless loop.
+    if (card.dataset.aueState === state) return;
+    card.dataset.aueState = state;
+    restyleCard(card, state);
+  }
+
+  // Undo all our styling so every card is re-classified from scratch —
+  // needed when the hide/dim mode changes but card states stay the same.
+  function resetCardStates() {
+    for (const card of document.querySelectorAll('[data-aue-state]')) {
+      delete card.dataset.aueState;
+      card.style.display = '';
+      card.style.opacity = '';
+      card.style.filter = '';
+    }
+  }
+
+  function restyleCard(card, state) {
+    if (state === 'ok') {
+      card.style.display = '';
+      card.style.opacity = '';
+      card.style.filter = '';
+    } else if (settings.mode === 'hide') {
+      card.style.display = 'none';
+    } else {
+      card.style.display = '';
+      card.style.opacity = '0.45';
+      card.style.filter = 'grayscale(0.8)';
+    }
+  }
+
+  // ---------------------------------------------------------------- sorting
+
+  let mutatingOurselves = false;
+
+  function sortCards(cards) {
+    const byParent = new Map();
+    for (const card of cards) {
+      const p = card.parentElement;
+      if (!p) continue;
+      if (!byParent.has(p)) byParent.set(p, []);
+      byParent.get(p).push(card);
+    }
+    mutatingOurselves = true;
+    try {
+      for (const [parent, group] of byParent) {
+        if (group.length < 2) continue;
+        const sorted = [...group].sort((a, b) => {
+          const pa = getPrice(a), pb = getPrice(b);
+          if (pa === null && pb === null) return 0;
+          if (pa === null) return 1;
+          if (pb === null) return -1;
+          return pa - pb;
+        });
+        for (const card of sorted) parent.appendChild(card);
+      }
+    } finally {
+      mutatingOurselves = false;
+    }
+  }
+
+  // ------------------------------------------------------------------ apply
+
+  let lastCounts = { shown: 0, filtered: 0, sponsored: 0, duplicates: 0, total: 0 };
+
+  function apply() {
+    const { required, excluded, optional } = parseQuery(getQueryText());
+    const threshold = STRICTNESS_FRACTION[settings.strictness] ?? 0.75;
+
+    // Alibaba's markup contains card nodes it never displays (templates,
+    // offscreen sections). Classifying those skews the counts without any
+    // visible effect, so only keep cards that render — or that we hid
+    // ourselves (aueState set), which must stay managed so they can reappear.
+    const allCards = findCards();
+    const cards = allCards.filter(
+      (c) => c.dataset.aueState || c.getClientRects().length > 0
+    );
+    if (cards.length < allCards.length) {
+      console.debug('[Alibaba Ultra Efficient]',
+        `ignoring ${allCards.length - cards.length} cards the site itself hides`);
+    }
+
+    const counts = { shown: 0, filtered: 0, sponsored: 0, duplicates: 0, total: cards.length };
+    // Product ids already shown in this pass; a second listing of the same
+    // product (typically a sponsored copy of an organic result) is a dupe.
+    // Only listings we actually kept count, so hiding an ad never causes its
+    // organic twin to be hidden as a "duplicate" too.
+    const keptIds = new Set();
+    const adTitles = [];
+    for (const card of cards) {
+      const title = getTitle(card);
+      const id = cardProductId(card);
+      if (settings.hideSponsored && isSponsored(card)) {
+        setCardState(card, 'sponsored');
+        counts.sponsored++;
+        adTitles.push(title || '(no title)');
+      } else if (id && keptIds.has(id)) {
+        setCardState(card, 'duplicate');
+        counts.duplicates++;
+      // No title extracted means we can't judge relevance — fail open, never hide
+      } else if (title && isExcluded(title, excluded)) {
+        setCardState(card, 'irrelevant');
+        counts.filtered++;
+      } else if (title && required.some((p) => !hasPhrase(title, p))) {
+        setCardState(card, 'irrelevant');
+        counts.filtered++;
+      } else if (title && threshold > 0 && relevance(title, optional) < threshold) {
+        setCardState(card, 'irrelevant');
+        counts.filtered++;
+      } else {
+        setCardState(card, 'ok');
+        counts.shown++;
+        if (id) keptIds.add(id);
+      }
+    }
+
+    if (settings.sortByPrice) sortCards(cards);
+
+    const changed = JSON.stringify(counts) !== JSON.stringify(lastCounts);
+    lastCounts = counts;
+    if (changed) {
+      console.info('[Alibaba Ultra Efficient]',
+        `${counts.total} cards found — ${counts.shown} shown, ${counts.filtered} off-topic, ` +
+        `${counts.sponsored} ads, ${counts.duplicates} dupes`);
+      if (adTitles.length) {
+        console.debug('[Alibaba Ultra Efficient] flagged as ads:', adTitles);
+      }
+    }
+    updatePanel();
+  }
+
+  // ------------------------------------------------------------------ panel
+
+  let panel;
+
+  function updatePanel() {
+    if (!panel) return;
+    const c = lastCounts;
+    panel.querySelector('#aue-counts').textContent =
+      `${c.shown}/${c.total} shown · ${c.filtered} off-topic · ${c.sponsored} ads · ${c.duplicates} dupes`;
+  }
+
+  function buildPanel() {
+    panel = document.createElement('div');
+    panel.id = 'aue-panel';
+    panel.innerHTML = `
+      <style>
+        #aue-panel {
+          /* bottom-left: Alibaba parks its own floating widgets bottom-right */
+          position: fixed; bottom: 16px; left: 16px; z-index: 999999;
+          background: rgba(20, 20, 25, 0.92); color: #eee;
+          font: 12px/1.5 -apple-system, "Segoe UI", sans-serif;
+          border-radius: 8px; padding: 10px 12px;
+          box-shadow: 0 4px 16px rgba(0,0,0,.35);
+          display: flex; flex-direction: column; gap: 6px; min-width: 220px;
+        }
+        #aue-panel.aue-collapsed > :not(#aue-header) { display: none; }
+        #aue-panel #aue-header { cursor: pointer; font-weight: 600; display: flex; justify-content: space-between; }
+        #aue-panel label { display: flex; justify-content: space-between; align-items: center; gap: 8px; cursor: pointer; }
+        #aue-panel select { background: #333; color: #eee; border: 1px solid #555; border-radius: 4px; padding: 1px 4px; }
+        #aue-panel #aue-counts { color: #9ad; }
+      </style>
+      <div id="aue-header"><span>Alibaba Ultra Efficient</span><span id="aue-toggle">–</span></div>
+      <div id="aue-counts"></div>
+      <label>Match strictness
+        <select id="aue-strictness">
+          <option value="all">all words</option>
+          <option value="most">most words</option>
+          <option value="half">half the words</option>
+          <option value="any">any word</option>
+          <option value="off">off</option>
+        </select>
+      </label>
+      <label>Filtered results
+        <select id="aue-mode">
+          <option value="hide">hide</option>
+          <option value="dim">dim</option>
+        </select>
+      </label>
+      <label>Hide sponsored <input type="checkbox" id="aue-ads"></label>
+      <label>Sort by price <input type="checkbox" id="aue-sort"></label>
+    `;
+    document.body.appendChild(panel);
+
+    const $ = (sel) => panel.querySelector(sel);
+    $('#aue-strictness').value = settings.strictness;
+    $('#aue-mode').value = settings.mode;
+    $('#aue-ads').checked = settings.hideSponsored;
+    $('#aue-sort').checked = settings.sortByPrice;
+
+    $('#aue-header').addEventListener('click', () => {
+      panel.classList.toggle('aue-collapsed');
+      $('#aue-toggle').textContent = panel.classList.contains('aue-collapsed') ? '+' : '–';
+    });
+    $('#aue-strictness').addEventListener('change', (e) => {
+      settings.strictness = e.target.value; saveSettings(); apply();
+    });
+    $('#aue-mode').addEventListener('change', (e) => {
+      settings.mode = e.target.value; saveSettings();
+      resetCardStates();
+      apply();
+    });
+    $('#aue-ads').addEventListener('change', (e) => {
+      settings.hideSponsored = e.target.checked; saveSettings(); apply();
+    });
+    $('#aue-sort').addEventListener('change', (e) => {
+      settings.sortByPrice = e.target.checked; saveSettings();
+      if (settings.sortByPrice) apply();
+      else location.reload(); // restore the original order
+    });
+  }
+
+  // ------------------------------------------------- observe lazy loading
+
+  let debounceTimer = null;
+
+  function scheduleApply() {
+    if (mutatingOurselves) return;
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(apply, 400);
+  }
+
+  function start() {
+    buildPanel();
+    apply();
+    const observer = new MutationObserver((mutations) => {
+      if (mutatingOurselves) return;
+      // Ignore mutations inside our own panel
+      if (mutations.every((m) => panel.contains(m.target))) return;
+      scheduleApply();
+    });
+    // attributes too: Alibaba shows/hides existing cards by toggling
+    // style/class, which childList alone never sees — that froze the counts
+    // at whatever was rendered when apply() last ran. setCardState's
+    // skip-when-unchanged guard keeps our own style writes from looping this.
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['style', 'class'],
+    });
+    // Re-apply on SPA-style navigation (query changes without a page load)
+    let lastUrl = location.href;
+    setInterval(() => {
+      if (location.href !== lastUrl) {
+        lastUrl = location.href;
+        scheduleApply();
+      }
+    }, 800);
+  }
+
+  // ---------------------------------------------------------------- bootstrap
+
+  const log = (...args) => console.info('[Alibaba Ultra Efficient]', ...args);
+
+  function isSearchPage() {
+    if (/\/trade\/search|\/search\/|\/(?:showroom|products)\/.+\.html/.test(location.pathname)) return true;
+    if (/searchtext|keyword/i.test(location.search)) return true;
+    return document.querySelector(PRODUCT_LINK) !== null;
+  }
+
+  let started = false;
+
+  function tryStart() {
+    if (started) return true;
+    if (!isSearchPage()) return false;
+    started = true;
+    log(`active on ${location.href} — query: "${getQueryText()}"`);
+    start();
+    return true;
+  }
+
+  log('script loaded');
+  // Never give up: on cold sessions (incognito) results only render after the
+  // slider captcha / cookie banner, long after any fixed startup window. The
+  // 1s poll is cheap (a path regex, plus one querySelector on non-search
+  // pages) and also catches SPA navigation onto a search page.
+  let attempts = 0;
+  const bootTimer = setInterval(() => {
+    if (tryStart()) {
+      clearInterval(bootTimer);
+    } else if (++attempts === 12) {
+      log('no search results detected yet — captcha or slow load? Still watching.');
+    }
+  }, 1000);
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', tryStart);
+  } else {
+    tryStart();
+  }
+})();
