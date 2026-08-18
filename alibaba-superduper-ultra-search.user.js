@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Alibaba SuperDuper Ultra Search
 // @namespace    mathias.alibaba.ultra
-// @version      2.0
+// @version      2.1
 // @description  Filter out irrelevant Alibaba search results, optionally hide sponsored items, and sort results by price (client-side). Inspired by "AliExpress Ultra Efficient".
 // @homepageURL  https://github.com/mathiasm74/superduper-ultra-ali-search
 // @supportURL   https://github.com/mathiasm74/superduper-ultra-ali-search/issues
@@ -568,7 +568,7 @@
         #aue-panel #aue-header { cursor: pointer; font-weight: 600; display: flex; justify-content: space-between; }
         #aue-panel label { display: flex; justify-content: space-between; align-items: center; gap: 8px; cursor: pointer; }
         #aue-panel select { background: #333; color: #eee; border: 1px solid #555; border-radius: 4px; padding: 1px 4px; }
-        #aue-panel input[type="text"] { background: #333; color: #eee; border: 1px solid #555; border-radius: 4px; padding: 1px 4px; width: 110px; }
+        #aue-panel input[type="text"] { background: #333; color: #eee; border: 1px solid #555; border-radius: 4px; padding: 1px 4px; width: 165px; }
         #aue-panel #aue-min, #aue-panel #aue-max { width: 46px; }
         #aue-panel #aue-counts { color: #9ad; }
       </style>
