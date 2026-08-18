@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AliExpress Ultra Efficient 2
 // @namespace    mathias.aliexpress.ultra
-// @version      1.10
+// @version      1.11
 // @description  Filter out irrelevant AliExpress search results, hide sponsored items and duplicates, and sort results by price (client-side). A modern rebuild of the classic "AliExpress Ultra Efficient".
 // @homepageURL  https://github.com/mathiasm74/alibaba-ultra-efficient
 // @supportURL   https://github.com/mathiasm74/alibaba-ultra-efficient/issues
@@ -33,6 +33,10 @@
     mode: 'hide',
     hideSponsored: true,
     sortByPrice: false,
+    // Enforce the classic Ultra Efficient URL params: list view, server-side
+    // lowest-price sort, free-shipping-only (which makes the price sort
+    // effectively shipping-inclusive: free shipping ⇒ item price = total).
+    classicMode: false,
   };
 
   const settings = Object.assign({}, DEFAULTS, GM_getValue('settings', {}));
@@ -49,6 +53,42 @@
   ]);
 
   // ------------------------------------------------------------------ query
+
+  // ------------------------------------------------------------ classic mode
+
+  // The 2016-era Ultra Efficient params. AliExpress may have stopped honoring
+  // some of them; applying them is harmless either way.
+  const CLASSIC_PARAMS = { g: 'n', SortType: 'price_asc', isFreeShip: 'y', isRtl: 'yes' };
+  const CLASSIC_GUARD = 'aue-classic-applied';
+
+  function classicParamsMissing() {
+    const p = new URLSearchParams(location.search);
+    return Object.entries(CLASSIC_PARAMS).some(([k, v]) => p.get(k) !== v);
+  }
+
+  function setClassicParams(on) {
+    const p = new URLSearchParams(location.search);
+    for (const [k, v] of Object.entries(CLASSIC_PARAMS)) {
+      if (on) p.set(k, v);
+      else p.delete(k);
+    }
+    location.search = p.toString();
+  }
+
+  // Returns true when a reload is underway. The sessionStorage guard keeps a
+  // backend that strips the params from causing a reload loop.
+  function enforceClassicMode() {
+    if (!settings.classicMode || !classicParamsMissing()) return false;
+    const key = CLASSIC_GUARD + location.pathname;
+    if (sessionStorage.getItem(key)) {
+      log('classic mode: the site dropped the classic params — not retrying.');
+      return false;
+    }
+    sessionStorage.setItem(key, '1');
+    log('classic mode: applying list view + lowest-price + free-shipping params');
+    setClassicParams(true);
+    return true;
+  }
 
   function getQueryText() {
     const params = new URLSearchParams(location.search);
@@ -555,6 +595,7 @@
       </label>
       <label>Hide sponsored <input type="checkbox" id="aue-ads"></label>
       <label>Sort by price <input type="checkbox" id="aue-sort"></label>
+      <label>Classic sort (list + free ship) <input type="checkbox" id="aue-classic"></label>
     `;
     document.body.appendChild(panel);
 
@@ -563,6 +604,7 @@
     $('#aue-mode').value = settings.mode;
     $('#aue-ads').checked = settings.hideSponsored;
     $('#aue-sort').checked = settings.sortByPrice;
+    $('#aue-classic').checked = settings.classicMode;
 
     $('#aue-header').addEventListener('click', () => {
       panel.classList.toggle('aue-collapsed');
@@ -583,6 +625,11 @@
       settings.sortByPrice = e.target.checked; saveSettings();
       if (settings.sortByPrice) apply();
       else location.reload(); // restore the original order
+    });
+    $('#aue-classic').addEventListener('change', (e) => {
+      settings.classicMode = e.target.checked; saveSettings();
+      sessionStorage.removeItem(CLASSIC_GUARD + location.pathname);
+      setClassicParams(settings.classicMode); // reloads the page
     });
   }
 
@@ -640,6 +687,7 @@
   function tryStart() {
     if (started) return true;
     if (!isSearchPage()) return false;
+    if (enforceClassicMode()) return true; // page is reloading with the params
     started = true;
     log(`active on ${location.href} — query: "${getQueryText()}"`);
     start();
