@@ -1,4 +1,4 @@
-# Ultra Efficient userscripts for Alibaba & AliExpress
+# SuperDuper Ultra search userscripts for AliExpress & Alibaba
 
 Tampermonkey userscripts that clean up search results:
 
@@ -33,8 +33,8 @@ through URL parameters anymore, everything works client-side on the rendered pag
    **Allow User Scripts** for it (`chrome://extensions` → Tampermonkey → Details).
 2. Click to install — Tampermonkey shows its install screen, and updates are
    picked up automatically from this repo:
-   - [**Alibaba script**](https://raw.githubusercontent.com/mathiasm74/alibaba-ultra-efficient/main/alibaba-ultra-efficient.user.js)
-   - [**AliExpress script**](https://raw.githubusercontent.com/mathiasm74/alibaba-ultra-efficient/main/aliexpress-superduper-ultra-search.user.js)
+   - [**Alibaba script**](https://raw.githubusercontent.com/mathiasm74/superduper-ultra-ali-search/main/alibaba-ultra-efficient.user.js)
+   - [**AliExpress script**](https://raw.githubusercontent.com/mathiasm74/superduper-ultra-ali-search/main/aliexpress-superduper-ultra-search.user.js)
 3. Search on the site — a control panel appears bottom-left on search result pages.
 
 ## Notes
