@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Alibaba Ultra Efficient
 // @namespace    mathias.alibaba.ultra
-// @version      1.11
+// @version      1.12
 // @description  Filter out irrelevant Alibaba search results, optionally hide sponsored items, and sort results by price (client-side). Inspired by "AliExpress Ultra Efficient".
 // @homepageURL  https://github.com/mathiasm74/alibaba-ultra-efficient
 // @supportURL   https://github.com/mathiasm74/alibaba-ultra-efficient/issues
@@ -412,7 +412,13 @@
           if (pb === null) return -1;
           return pa - pb;
         });
+        // Skip the DOM writes when already in order: re-appending even an
+        // already-last node generates mutation records, so every debounced
+        // apply() would churn the observer (and fight site re-renders).
+        if (sorted.every((card, i) => card === group[i])) continue;
         for (const card of sorted) parent.appendChild(card);
+        console.debug('[Alibaba Ultra Efficient] sorted prices:',
+          sorted.slice(0, 20).map((c) => getPrice(c)));
       }
     } finally {
       mutatingOurselves = false;
