@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Alibaba Ultra Efficient
 // @namespace    mathias.alibaba.ultra
-// @version      1.14
+// @version      1.15
 // @description  Filter out irrelevant Alibaba search results, optionally hide sponsored items, and sort results by price (client-side). Inspired by "AliExpress Ultra Efficient".
 // @homepageURL  https://github.com/mathiasm74/alibaba-ultra-efficient
 // @supportURL   https://github.com/mathiasm74/alibaba-ultra-efficient/issues
@@ -30,10 +30,11 @@
     mode: 'hide',
     hideSponsored: true,
     sortByPrice: false,
-    // Panel-managed exclusions. Unlike -terms typed into the query, these
-    // never reach the site's search engine — the engine has no negative
-    // operator and would treat them as positive keywords, ATTRACTING the
-    // very results you want gone.
+    // Panel-managed terms; neither ever reaches the site's search engine.
+    // includeTerms are all mandatory (like "quoted" query terms).
+    // excludeTerms are forbidden; typed as -terms in the query they'd be
+    // sent as positive keywords, ATTRACTING the results you want gone.
+    includeTerms: '',
     excludeTerms: '',
   };
 
@@ -100,9 +101,9 @@
     return { required, excluded, optional: tokenize(rest) };
   }
 
-  // Parse the panel's exclude field: bare words and "quoted phrases";
+  // Parse a panel term field: bare words and "quoted phrases";
   // a leading - is tolerated but not required.
-  function parseExcludeList(text) {
+  function parseTermList(text) {
     const out = [];
     let rest = String(text || '').replace(/"([^"]*)"/g, (_, p) => {
       p = p.trim().toLowerCase();
@@ -454,7 +455,8 @@
 
   function apply() {
     const { required, excluded, optional } = parseQuery(getQueryText());
-    excluded.push(...parseExcludeList(settings.excludeTerms));
+    required.push(...parseTermList(settings.includeTerms));
+    excluded.push(...parseTermList(settings.excludeTerms));
     const threshold = STRICTNESS_FRACTION[settings.strictness] ?? 0.75;
 
     // Alibaba's markup contains card nodes it never displays (templates,
@@ -570,6 +572,9 @@
       </label>
       <label>Hide sponsored <input type="checkbox" id="aue-ads"></label>
       <label>Sort by price <input type="checkbox" id="aue-sort"></label>
+      <label>Require words
+        <input type="text" id="aue-include" placeholder="word &quot;a phrase&quot;">
+      </label>
       <label>Exclude words
         <input type="text" id="aue-exclude" placeholder="word &quot;a phrase&quot;">
       </label>
@@ -581,6 +586,7 @@
     $('#aue-mode').value = settings.mode;
     $('#aue-ads').checked = settings.hideSponsored;
     $('#aue-sort').checked = settings.sortByPrice;
+    $('#aue-include').value = settings.includeTerms;
     $('#aue-exclude').value = settings.excludeTerms;
 
     $('#aue-header').addEventListener('click', () => {
@@ -604,6 +610,9 @@
       else location.reload(); // restore the original order
     });
     // 'change' fires on Enter or when the field loses focus
+    $('#aue-include').addEventListener('change', (e) => {
+      settings.includeTerms = e.target.value; saveSettings(); apply();
+    });
     $('#aue-exclude').addEventListener('change', (e) => {
       settings.excludeTerms = e.target.value; saveSettings(); apply();
     });

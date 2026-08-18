@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AliExpress Ultra Efficient 2
 // @namespace    mathias.aliexpress.ultra
-// @version      1.16
+// @version      1.17
 // @description  Filter out irrelevant AliExpress search results, hide sponsored items and duplicates, and sort results by price (client-side). A modern rebuild of the classic "AliExpress Ultra Efficient".
 // @homepageURL  https://github.com/mathiasm74/alibaba-ultra-efficient
 // @supportURL   https://github.com/mathiasm74/alibaba-ultra-efficient/issues
@@ -33,10 +33,12 @@
     mode: 'hide',
     hideSponsored: true,
     sortByPrice: false,
-    // Panel-managed exclusions. Unlike -terms typed into the query, these
-    // never reach the site's search engine — the engine has no negative
-    // operator and would treat them as positive keywords, ATTRACTING the
-    // very results you want gone.
+    // Panel-managed terms; neither ever reaches the site's search engine.
+    // includeTerms are all mandatory (like "quoted" query terms) — the only
+    // way to filter image-search results, which have no text query.
+    // excludeTerms are forbidden; typed as -terms in the query they'd be
+    // sent as positive keywords, ATTRACTING the results you want gone.
+    includeTerms: '',
     excludeTerms: '',
   };
 
@@ -57,6 +59,10 @@
 
   function getQueryText() {
     const params = new URLSearchParams(location.search);
+    // Image search (/w/wholesale-.html?isNewImageSearch=y&imageId=…) has no
+    // text query — don't scrape junk from the path or the search box. The
+    // panel's "Require words" field is the way to filter these results.
+    if (params.get('isNewImageSearch') === 'y' || params.has('imageId')) return '';
     for (const key of ['SearchText', 'searchText', 'keywords', 'keyword', 'q']) {
       const v = params.get(key);
       if (v) return v;
@@ -107,9 +113,9 @@
     return { required, excluded, optional: tokenize(rest) };
   }
 
-  // Parse the panel's exclude field: bare words and "quoted phrases";
+  // Parse a panel term field: bare words and "quoted phrases";
   // a leading - is tolerated but not required.
-  function parseExcludeList(text) {
+  function parseTermList(text) {
     const out = [];
     let rest = String(text || '').replace(/"([^"]*)"/g, (_, p) => {
       p = p.trim().toLowerCase();
@@ -472,7 +478,8 @@
 
   function apply() {
     const { required, excluded, optional } = parseQuery(getQueryText());
-    excluded.push(...parseExcludeList(settings.excludeTerms));
+    required.push(...parseTermList(settings.includeTerms));
+    excluded.push(...parseTermList(settings.excludeTerms));
     const threshold = STRICTNESS_FRACTION[settings.strictness] ?? 0.75;
 
     // The markup can contain card nodes the site never displays (templates,
@@ -588,6 +595,9 @@
       </label>
       <label>Hide sponsored <input type="checkbox" id="aue-ads"></label>
       <label>Sort by price <input type="checkbox" id="aue-sort"></label>
+      <label>Require words
+        <input type="text" id="aue-include" placeholder="word &quot;a phrase&quot;">
+      </label>
       <label>Exclude words
         <input type="text" id="aue-exclude" placeholder="word &quot;a phrase&quot;">
       </label>
@@ -599,6 +609,7 @@
     $('#aue-mode').value = settings.mode;
     $('#aue-ads').checked = settings.hideSponsored;
     $('#aue-sort').checked = settings.sortByPrice;
+    $('#aue-include').value = settings.includeTerms;
     $('#aue-exclude').value = settings.excludeTerms;
 
     $('#aue-header').addEventListener('click', () => {
@@ -622,6 +633,9 @@
       else location.reload(); // restore the original order
     });
     // 'change' fires on Enter or when the field loses focus
+    $('#aue-include').addEventListener('change', (e) => {
+      settings.includeTerms = e.target.value; saveSettings(); apply();
+    });
     $('#aue-exclude').addEventListener('change', (e) => {
       settings.excludeTerms = e.target.value; saveSettings(); apply();
     });
