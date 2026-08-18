@@ -25,9 +25,6 @@ through URL parameters anymore, everything works client-side on the rendered pag
   included — Alibaba's search cards don't carry shipping costs.
 - **Control panel** — bottom-left overlay with live counts
   ("37/60 shown · 12 off-topic · 10 ads · 1 dupes") and all toggles; settings persist.
-- **Debug mode** — the "mark (debug)" option outlines filtered cards in place
-  instead of hiding them (red = sponsored, orange = off-topic, purple = duplicate),
-  so you can verify classifications at a glance.
 
 ## Install
 
