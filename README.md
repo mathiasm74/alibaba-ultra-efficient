@@ -24,8 +24,9 @@ works client-side on the rendered page.
 
 1. Install [Tampermonkey](https://www.tampermonkey.net/) and enable
    **Allow User Scripts** for it (`chrome://extensions` → Tampermonkey → Details).
-2. Open `alibaba-ultra-efficient.user.js` in this repo and copy it into a new
-   Tampermonkey script, or use Tampermonkey → Utilities → Import.
+2. [**Click here to install the script**](https://raw.githubusercontent.com/mathiasm74/alibaba-ultra-efficient/main/alibaba-ultra-efficient.user.js)
+   — Tampermonkey will show its install screen. Updates are picked up
+   automatically from this repo.
 3. Search on Alibaba.com — the script runs on `www.alibaba.com/search/page` URLs.
 
 ## Notes

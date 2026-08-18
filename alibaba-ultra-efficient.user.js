@@ -1,8 +1,13 @@
 // ==UserScript==
 // @name         Alibaba Ultra Efficient
 // @namespace    mathias.alibaba.ultra
-// @version      1.0
+// @version      1.1
 // @description  Filter out irrelevant Alibaba search results, optionally hide sponsored items, and sort results by price (client-side). Inspired by "AliExpress Ultra Efficient".
+// @homepageURL  https://github.com/mathiasm74/alibaba-ultra-efficient
+// @supportURL   https://github.com/mathiasm74/alibaba-ultra-efficient/issues
+// @downloadURL  https://raw.githubusercontent.com/mathiasm74/alibaba-ultra-efficient/main/alibaba-ultra-efficient.user.js
+// @updateURL    https://raw.githubusercontent.com/mathiasm74/alibaba-ultra-efficient/main/alibaba-ultra-efficient.user.js
+// @license      MIT
 // @match        https://www.alibaba.com/search/page*
 // @match        https://*.alibaba.com/search/page*
 // @grant        GM_getValue
@@ -278,7 +283,7 @@
     } else {
       card.style.display = '';
       card.style.opacity = '0.45';
-      card.style.filter = 'grayscale(0.8)';
+      card.style.filter = 'grayscale(1)';
     }
   }
 
