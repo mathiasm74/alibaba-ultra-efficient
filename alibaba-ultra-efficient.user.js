@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Alibaba Ultra Efficient
 // @namespace    mathias.alibaba.ultra
-// @version      1.2
+// @version      1.3
 // @description  Filter out irrelevant Alibaba search results, optionally hide sponsored items, and sort results by price (client-side). Inspired by "AliExpress Ultra Efficient".
 // @homepageURL  https://github.com/mathiasm74/alibaba-ultra-efficient
 // @supportURL   https://github.com/mathiasm74/alibaba-ultra-efficient/issues
@@ -156,9 +156,28 @@
   function inOverlay(el) {
     for (let n = el; n && n !== document.body; n = n.parentElement) {
       if (n.getAttribute('role') === 'dialog' || n.hasAttribute('aria-modal')) return true;
-      if (getComputedStyle(n).position === 'fixed') return true;
+      if (/(modal|dialog|drawer|popup|preview|lightbox)/i.test(String(n.className))) return true;
+      const cs = getComputedStyle(n);
+      if (cs.position === 'fixed') return true;
+      // Overlays float on an explicit stacking level; the results grid never
+      // needs one. If a grid ancestor ever does carry a high z-index, the
+      // failure mode is "nothing gets filtered", never "content hidden".
+      if (cs.position !== 'static') {
+        const z = parseInt(cs.zIndex, 10);
+        if (!isNaN(z) && z >= 100) return true;
+      }
     }
     return false;
+  }
+
+  // Remove our stamp and styling from something that turned out not to be a
+  // result card, so it can never be left hidden.
+  function unstamp(el) {
+    if (!el.dataset.aueState) return;
+    delete el.dataset.aueState;
+    el.style.display = '';
+    el.style.opacity = '';
+    el.style.filter = '';
   }
 
   function findCards() {
@@ -172,20 +191,30 @@
       const card = cardFromLink(link, productId(link.href));
       if (!card || card === document.body) continue;
       if (inOverlay(card)) {
-        // Un-stamp an overlay we styled before this guard existed, so a
-        // reused modal node can't stay hidden.
-        if (card.dataset.aueState) {
-          delete card.dataset.aueState;
-          card.style.display = '';
-          card.style.opacity = '';
-          card.style.filter = '';
-        }
+        unstamp(card);
         continue;
       }
       cards.add(card);
     }
     // Drop cards that contain other cards (grid wrappers picked up by the climb)
-    return [...cards].filter((c) => ![...cards].some((o) => o !== c && c.contains(o)));
+    const list = [...cards].filter((c) => ![...cards].some((o) => o !== c && c.contains(o)));
+    // Preview modals that aren't position:fixed still sneak past inOverlay().
+    // Structural backstop: real result cards live together in a grid, while a
+    // modal's card sits alone in its wrapper. When a grid clearly exists
+    // (some parent holds 3+ cards), drop any card that is the only one in
+    // its parent.
+    const perParent = new Map();
+    for (const c of list) {
+      perParent.set(c.parentElement, (perParent.get(c.parentElement) || 0) + 1);
+    }
+    if (Math.max(0, ...perParent.values()) >= 3) {
+      return list.filter((c) => {
+        if (perParent.get(c.parentElement) > 1) return true;
+        unstamp(c);
+        return false;
+      });
+    }
+    return list;
   }
 
   function cardProductId(card) {
