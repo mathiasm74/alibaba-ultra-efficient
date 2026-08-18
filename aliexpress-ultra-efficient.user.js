@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AliExpress Ultra Efficient 2
 // @namespace    mathias.aliexpress.ultra
-// @version      1.17
+// @version      1.18
 // @description  Filter out irrelevant AliExpress search results, hide sponsored items and duplicates, and sort results by price (client-side). A modern rebuild of the classic "AliExpress Ultra Efficient".
 // @homepageURL  https://github.com/mathiasm74/alibaba-ultra-efficient
 // @supportURL   https://github.com/mathiasm74/alibaba-ultra-efficient/issues
@@ -40,6 +40,10 @@
     // sent as positive keywords, ATTRACTING the results you want gone.
     includeTerms: '',
     excludeTerms: '',
+    // Price bounds in the displayed currency; localized input accepted
+    // ("29,49", "1 481"). Empty = no bound.
+    minPrice: '',
+    maxPrice: '',
   };
 
   const settings = Object.assign({}, DEFAULTS, GM_getValue('settings', {}));
@@ -396,7 +400,7 @@
   }
 
   function setCardState(card, state) {
-    // state: 'ok' | 'irrelevant' | 'sponsored' | 'duplicate'
+    // state: 'ok' | 'irrelevant' | 'sponsored' | 'duplicate' | 'price'
     // Skip when unchanged AND correctly styled: since the observer watches
     // style mutations, redundant style writes would re-trigger it in an
     // endless loop.
@@ -474,12 +478,14 @@
 
   // ------------------------------------------------------------------ apply
 
-  let lastCounts = { shown: 0, filtered: 0, sponsored: 0, duplicates: 0, total: 0 };
+  let lastCounts = { shown: 0, filtered: 0, sponsored: 0, duplicates: 0, priced: 0, total: 0 };
 
   function apply() {
     const { required, excluded, optional } = parseQuery(getQueryText());
     required.push(...parseTermList(settings.includeTerms));
     excluded.push(...parseTermList(settings.excludeTerms));
+    const minPrice = parseAmount(settings.minPrice);
+    const maxPrice = parseAmount(settings.maxPrice);
     const threshold = STRICTNESS_FRACTION[settings.strictness] ?? 0.75;
 
     // The markup can contain card nodes the site never displays (templates,
@@ -495,7 +501,15 @@
         `ignoring ${allCards.length - cards.length} cards the site itself hides`);
     }
 
-    const counts = { shown: 0, filtered: 0, sponsored: 0, duplicates: 0, total: cards.length };
+    // A card with an unparsable price is never price-filtered (fail open)
+    const priceOutOfRange = (card) => {
+      if (minPrice === null && maxPrice === null) return false;
+      const p = getPrice(card);
+      if (p === null) return false;
+      return (minPrice !== null && p < minPrice) || (maxPrice !== null && p > maxPrice);
+    };
+
+    const counts = { shown: 0, filtered: 0, sponsored: 0, duplicates: 0, priced: 0, total: cards.length };
     // Product ids already shown in this pass; a second listing of the same
     // product (typically a sponsored copy of an organic result) is a dupe.
     // Only listings we actually kept count, so hiding an ad never causes its
@@ -512,6 +526,9 @@
       } else if (id && keptIds.has(id)) {
         setCardState(card, 'duplicate');
         counts.duplicates++;
+      } else if (priceOutOfRange(card)) {
+        setCardState(card, 'price');
+        counts.priced++;
       // No title extracted means we can't judge relevance — fail open, never hide
       } else if (title && isExcluded(title, excluded)) {
         setCardState(card, 'irrelevant');
@@ -536,7 +553,7 @@
     if (changed) {
       console.info('[AliExpress Ultra Efficient]',
         `${counts.total} cards found — ${counts.shown} shown, ${counts.filtered} off-topic, ` +
-        `${counts.sponsored} ads, ${counts.duplicates} dupes`);
+        `${counts.sponsored} ads, ${counts.duplicates} dupes, ${counts.priced} priced out`);
       if (adTitles.length) {
         console.debug('[AliExpress Ultra Efficient] flagged as ads:', adTitles);
       }
@@ -552,7 +569,8 @@
     if (!panel) return;
     const c = lastCounts;
     panel.querySelector('#aue-counts').textContent =
-      `${c.shown}/${c.total} shown · ${c.filtered} off-topic · ${c.sponsored} ads · ${c.duplicates} dupes`;
+      `${c.shown}/${c.total} shown · ${c.filtered} off-topic · ${c.sponsored} ads · ` +
+      `${c.duplicates} dupes` + (c.priced ? ` · ${c.priced} priced out` : '');
   }
 
   function buildPanel() {
@@ -574,6 +592,7 @@
         #aue-panel label { display: flex; justify-content: space-between; align-items: center; gap: 8px; cursor: pointer; }
         #aue-panel select { background: #333; color: #eee; border: 1px solid #555; border-radius: 4px; padding: 1px 4px; }
         #aue-panel input[type="text"] { background: #333; color: #eee; border: 1px solid #555; border-radius: 4px; padding: 1px 4px; width: 110px; }
+        #aue-panel #aue-min, #aue-panel #aue-max { width: 46px; }
         #aue-panel #aue-counts { color: #9ad; }
       </style>
       <div id="aue-header"><span>AliExpress Ultra Efficient</span><span id="aue-toggle">–</span></div>
@@ -601,6 +620,9 @@
       <label>Exclude words
         <input type="text" id="aue-exclude" placeholder="word &quot;a phrase&quot;">
       </label>
+      <label>Price range
+        <span><input type="text" id="aue-min" placeholder="min"> – <input type="text" id="aue-max" placeholder="max"></span>
+      </label>
     `;
     document.body.appendChild(panel);
 
@@ -611,6 +633,8 @@
     $('#aue-sort').checked = settings.sortByPrice;
     $('#aue-include').value = settings.includeTerms;
     $('#aue-exclude').value = settings.excludeTerms;
+    $('#aue-min').value = settings.minPrice;
+    $('#aue-max').value = settings.maxPrice;
 
     $('#aue-header').addEventListener('click', () => {
       panel.classList.toggle('aue-collapsed');
@@ -638,6 +662,12 @@
     });
     $('#aue-exclude').addEventListener('change', (e) => {
       settings.excludeTerms = e.target.value; saveSettings(); apply();
+    });
+    $('#aue-min').addEventListener('change', (e) => {
+      settings.minPrice = e.target.value; saveSettings(); apply();
+    });
+    $('#aue-max').addEventListener('change', (e) => {
+      settings.maxPrice = e.target.value; saveSettings(); apply();
     });
   }
 
