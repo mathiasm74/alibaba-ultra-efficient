@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AliExpress Ultra Efficient 2
 // @namespace    mathias.aliexpress.ultra
-// @version      1.8
+// @version      1.9
 // @description  Filter out irrelevant AliExpress search results, hide sponsored items and duplicates, and sort results by price (client-side). A modern rebuild of the classic "AliExpress Ultra Efficient".
 // @homepageURL  https://github.com/mathiasm74/alibaba-ultra-efficient
 // @supportURL   https://github.com/mathiasm74/alibaba-ultra-efficient/issues
