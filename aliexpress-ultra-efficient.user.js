@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AliExpress Ultra Efficient 2
 // @namespace    mathias.aliexpress.ultra
-// @version      1.14
+// @version      1.15
 // @description  Filter out irrelevant AliExpress search results, hide sponsored items and duplicates, and sort results by price (client-side). A modern rebuild of the classic "AliExpress Ultra Efficient".
 // @homepageURL  https://github.com/mathiasm74/alibaba-ultra-efficient
 // @supportURL   https://github.com/mathiasm74/alibaba-ultra-efficient/issues
@@ -33,10 +33,6 @@
     mode: 'hide',
     hideSponsored: true,
     sortByPrice: false,
-    // Enforce the classic Ultra Efficient URL params: list view, server-side
-    // lowest-price sort, free-shipping-only (which makes the price sort
-    // effectively shipping-inclusive: free shipping ⇒ item price = total).
-    classicMode: false,
   };
 
   const settings = Object.assign({}, DEFAULTS, GM_getValue('settings', {}));
@@ -53,57 +49,6 @@
   ]);
 
   // ------------------------------------------------------------------ query
-
-  // ------------------------------------------------------------ classic mode
-
-  // The modern equivalents of the 2016 Ultra Efficient params, taken from
-  // URLs the current site emits itself: g=n still works, the sort param is
-  // now lowercase sortType, and free shipping moved from isFreeShip=y to a
-  // selectedSwitches filter code. isRtl has no modern counterpart.
-  const CLASSIC_FIXED = { g: 'n', sortType: 'price_asc' };
-  const FREESHIP_SWITCH = 'filterCode:freeshipping';
-  const LEGACY_PARAMS = ['SortType', 'isFreeShip', 'isRtl'];
-  const CLASSIC_GUARD = 'aue-classic-applied';
-
-  function classicParamsMissing() {
-    const p = new URLSearchParams(location.search);
-    if (Object.entries(CLASSIC_FIXED).some(([k, v]) => p.get(k) !== v)) return true;
-    return !(p.get('selectedSwitches') || '').includes(FREESHIP_SWITCH);
-  }
-
-  function setClassicParams(on) {
-    const p = new URLSearchParams(location.search);
-    for (const k of LEGACY_PARAMS) p.delete(k);
-    // selectedSwitches can hold several comma-separated filters the user
-    // enabled — add/remove only our entry, never clobber the rest.
-    const switches = (p.get('selectedSwitches') || '')
-      .split(',')
-      .filter((s) => s && s !== FREESHIP_SWITCH);
-    if (on) {
-      for (const [k, v] of Object.entries(CLASSIC_FIXED)) p.set(k, v);
-      switches.push(FREESHIP_SWITCH);
-    } else {
-      for (const k of Object.keys(CLASSIC_FIXED)) p.delete(k);
-    }
-    if (switches.length) p.set('selectedSwitches', switches.join(','));
-    else p.delete('selectedSwitches');
-    location.search = p.toString();
-  }
-
-  // Returns true when a reload is underway. The sessionStorage guard keeps a
-  // backend that strips the params from causing a reload loop.
-  function enforceClassicMode() {
-    if (!settings.classicMode || !classicParamsMissing()) return false;
-    const key = CLASSIC_GUARD + location.pathname;
-    if (sessionStorage.getItem(key)) {
-      log('classic mode: the site dropped the classic params — not retrying.');
-      return false;
-    }
-    sessionStorage.setItem(key, '1');
-    log('classic mode: applying list view + lowest-price + free-shipping params');
-    setClassicParams(true);
-    return true;
-  }
 
   function getQueryText() {
     const params = new URLSearchParams(location.search);
@@ -620,7 +565,6 @@
       </label>
       <label>Hide sponsored <input type="checkbox" id="aue-ads"></label>
       <label>Sort by price <input type="checkbox" id="aue-sort"></label>
-      <label>Classic sort (list + free ship) <input type="checkbox" id="aue-classic"></label>
     `;
     document.body.appendChild(panel);
 
@@ -629,7 +573,6 @@
     $('#aue-mode').value = settings.mode;
     $('#aue-ads').checked = settings.hideSponsored;
     $('#aue-sort').checked = settings.sortByPrice;
-    $('#aue-classic').checked = settings.classicMode;
 
     $('#aue-header').addEventListener('click', () => {
       panel.classList.toggle('aue-collapsed');
@@ -650,11 +593,6 @@
       settings.sortByPrice = e.target.checked; saveSettings();
       if (settings.sortByPrice) apply();
       else location.reload(); // restore the original order
-    });
-    $('#aue-classic').addEventListener('change', (e) => {
-      settings.classicMode = e.target.checked; saveSettings();
-      sessionStorage.removeItem(CLASSIC_GUARD + location.pathname);
-      setClassicParams(settings.classicMode); // reloads the page
     });
   }
 
@@ -712,7 +650,6 @@
   function tryStart() {
     if (started) return true;
     if (!isSearchPage()) return false;
-    if (enforceClassicMode()) return true; // page is reloading with the params
     started = true;
     log(`active on ${location.href} — query: "${getQueryText()}"`);
     start();
