@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Alibaba Ultra Efficient
 // @namespace    mathias.alibaba.ultra
-// @version      1.13
+// @version      1.14
 // @description  Filter out irrelevant Alibaba search results, optionally hide sponsored items, and sort results by price (client-side). Inspired by "AliExpress Ultra Efficient".
 // @homepageURL  https://github.com/mathiasm74/alibaba-ultra-efficient
 // @supportURL   https://github.com/mathiasm74/alibaba-ultra-efficient/issues
@@ -30,6 +30,11 @@
     mode: 'hide',
     hideSponsored: true,
     sortByPrice: false,
+    // Panel-managed exclusions. Unlike -terms typed into the query, these
+    // never reach the site's search engine — the engine has no negative
+    // operator and would treat them as positive keywords, ATTRACTING the
+    // very results you want gone.
+    excludeTerms: '',
   };
 
   const settings = Object.assign({}, DEFAULTS, GM_getValue('settings', {}));
@@ -93,6 +98,22 @@
       return sp;
     });
     return { required, excluded, optional: tokenize(rest) };
+  }
+
+  // Parse the panel's exclude field: bare words and "quoted phrases";
+  // a leading - is tolerated but not required.
+  function parseExcludeList(text) {
+    const out = [];
+    let rest = String(text || '').replace(/"([^"]*)"/g, (_, p) => {
+      p = p.trim().toLowerCase();
+      if (p) out.push(p);
+      return ' ';
+    });
+    for (const w of rest.toLowerCase().split(/\s+/)) {
+      const t = w.replace(/^-/, '');
+      if (t) out.push(t);
+    }
+    return out;
   }
 
   function hasPhrase(title, phrase) {
@@ -433,6 +454,7 @@
 
   function apply() {
     const { required, excluded, optional } = parseQuery(getQueryText());
+    excluded.push(...parseExcludeList(settings.excludeTerms));
     const threshold = STRICTNESS_FRACTION[settings.strictness] ?? 0.75;
 
     // Alibaba's markup contains card nodes it never displays (templates,
@@ -526,6 +548,7 @@
         #aue-panel #aue-header { cursor: pointer; font-weight: 600; display: flex; justify-content: space-between; }
         #aue-panel label { display: flex; justify-content: space-between; align-items: center; gap: 8px; cursor: pointer; }
         #aue-panel select { background: #333; color: #eee; border: 1px solid #555; border-radius: 4px; padding: 1px 4px; }
+        #aue-panel input[type="text"] { background: #333; color: #eee; border: 1px solid #555; border-radius: 4px; padding: 1px 4px; width: 110px; }
         #aue-panel #aue-counts { color: #9ad; }
       </style>
       <div id="aue-header"><span>Alibaba Ultra Efficient</span><span id="aue-toggle">–</span></div>
@@ -547,6 +570,9 @@
       </label>
       <label>Hide sponsored <input type="checkbox" id="aue-ads"></label>
       <label>Sort by price <input type="checkbox" id="aue-sort"></label>
+      <label>Exclude words
+        <input type="text" id="aue-exclude" placeholder="word &quot;a phrase&quot;">
+      </label>
     `;
     document.body.appendChild(panel);
 
@@ -555,6 +581,7 @@
     $('#aue-mode').value = settings.mode;
     $('#aue-ads').checked = settings.hideSponsored;
     $('#aue-sort').checked = settings.sortByPrice;
+    $('#aue-exclude').value = settings.excludeTerms;
 
     $('#aue-header').addEventListener('click', () => {
       panel.classList.toggle('aue-collapsed');
@@ -575,6 +602,10 @@
       settings.sortByPrice = e.target.checked; saveSettings();
       if (settings.sortByPrice) apply();
       else location.reload(); // restore the original order
+    });
+    // 'change' fires on Enter or when the field loses focus
+    $('#aue-exclude').addEventListener('change', (e) => {
+      settings.excludeTerms = e.target.value; saveSettings(); apply();
     });
   }
 
