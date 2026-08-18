@@ -122,7 +122,10 @@
 
   // ----------------------------------------------------------- card scraping
 
-  const PRODUCT_LINK = 'a[href*="/item/"]';
+  // Not all result cards link to /item/…: "Bundle deals" cards link to an
+  // /ssr/…BundleDealsDutyCovered page with the product in ?productIds=.
+  // Both card types share the stable search-card-item anchor class.
+  const PRODUCT_LINK = 'a[href*="/item/"], a.search-card-item';
   // Known card containers as of 2026 (fy26 markup); AliExpress renames its
   // hashed classes constantly, so cardFromLink() below is the future-proof
   // fallback.
@@ -131,7 +134,12 @@
   // A card can link to its product more than once, so links must be grouped
   // by product before climbing, or each link looks like its own card.
   function productId(href) {
-    const m = href.match(/\/item\/(\d+)/);
+    const m =
+      href.match(/\/item\/(\d+)/) ||
+      // Bundle-deal links: ?productIds=<productId>:<skuId>
+      href.match(/[?&]productIds=(\d+)/) ||
+      // Last resort: the tracking param both link styles carry
+      href.match(/x_object_id%3A(\d+)/);
     return m ? m[1] : href.split(/[?#]/)[0];
   }
 
