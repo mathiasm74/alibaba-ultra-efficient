@@ -2,7 +2,7 @@
 
 Tampermonkey userscripts that clean up search results:
 
-- **Alibaba Ultra Efficient** (`alibaba-ultra-efficient.user.js`) — for
+- **Alibaba SuperDuper Ultra Search** (`alibaba-superduper-ultra-search.user.js`) — for
   Alibaba.com (`/search/page`)
 - **AliExpress SuperDuper Ultra Search** (`aliexpress-superduper-ultra-search.user.js`) —
   for AliExpress text and image search (`/w/wholesale-*`), a modern rebuild of the
@@ -33,7 +33,7 @@ through URL parameters anymore, everything works client-side on the rendered pag
    **Allow User Scripts** for it (`chrome://extensions` → Tampermonkey → Details).
 2. Click to install — Tampermonkey shows its install screen, and updates are
    picked up automatically from this repo:
-   - [**Alibaba script**](https://raw.githubusercontent.com/mathiasm74/superduper-ultra-ali-search/main/alibaba-ultra-efficient.user.js)
+   - [**Alibaba script**](https://raw.githubusercontent.com/mathiasm74/superduper-ultra-ali-search/main/alibaba-superduper-ultra-search.user.js)
    - [**AliExpress script**](https://raw.githubusercontent.com/mathiasm74/superduper-ultra-ali-search/main/aliexpress-superduper-ultra-search.user.js)
 3. Search on the site — a control panel appears bottom-left on search result pages.
 
@@ -42,5 +42,5 @@ through URL parameters anymore, everything works client-side on the rendered pag
 - Alibaba renames its CSS classes regularly. The script keys on stable signals
   (product-detail links, `data-` attributes) with generic fallbacks, and fails
   open: a card whose title can't be read is never hidden.
-- Diagnostics go to the browser console under `[Alibaba Ultra Efficient]`
+- Diagnostics go to the browser console under `[Alibaba SuperDuper Ultra Search]`
   (flagged ad titles are logged at Verbose/debug level).
