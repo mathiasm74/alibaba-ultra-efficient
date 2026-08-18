@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Alibaba Ultra Efficient
 // @namespace    mathias.alibaba.ultra
-// @version      1.12
+// @version      1.13
 // @description  Filter out irrelevant Alibaba search results, optionally hide sponsored items, and sort results by price (client-side). Inspired by "AliExpress Ultra Efficient".
 // @homepageURL  https://github.com/mathiasm74/alibaba-ultra-efficient
 // @supportURL   https://github.com/mathiasm74/alibaba-ultra-efficient/issues
@@ -277,7 +277,9 @@
   }
 
   const AMOUNT = '\\d(?:[\\d\\s\\u00a0\\u202f.,]*\\d)?';
-  const CURRENCY_BEFORE = new RegExp(`(?:US\\s?\\$|\\$|€|£|USD|EUR|GBP|SEK|NOK|DKK|kr)\\s*(${AMOUNT})`, 'i');
+  // kr/NOK/DKK are suffix-only currencies — as a prefix they'd match the
+  // digits that happen to follow a price in concatenated card text.
+  const CURRENCY_BEFORE = new RegExp(`(?:US\\s?\\$|\\$|€|£|USD|EUR|GBP|SEK)\\s*(${AMOUNT})`, 'i');
   const CURRENCY_AFTER = new RegExp(`(${AMOUNT})\\s*(?:USD|EUR|GBP|SEK|NOK|DKK|kr|US\\s?\\$|\\$|€|£)`, 'i');
 
   function getPrice(card) {

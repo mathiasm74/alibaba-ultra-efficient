@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AliExpress Ultra Efficient 2
 // @namespace    mathias.aliexpress.ultra
-// @version      1.12
+// @version      1.13
 // @description  Filter out irrelevant AliExpress search results, hide sponsored items and duplicates, and sort results by price (client-side). A modern rebuild of the classic "AliExpress Ultra Efficient".
 // @homepageURL  https://github.com/mathiasm74/alibaba-ultra-efficient
 // @supportURL   https://github.com/mathiasm74/alibaba-ultra-efficient/issues
@@ -333,23 +333,27 @@
   }
 
   const AMOUNT = '\\d(?:[\\d\\s\\u00a0\\u202f.,]*\\d)?';
-  const CURRENCY_BEFORE = new RegExp(`(?:US\\s?\\$|\\$|€|£|USD|EUR|GBP|SEK|NOK|DKK|kr)\\s*(${AMOUNT})`, 'i');
+  // kr/NOK/DKK are suffix-only: in concatenated card text a "kr" is followed
+  // by whatever comes next (crossed-out price, rating, sold count), so
+  // treating it as a prefix parsed "922,35kr5 | 2 sold" as price 52.
+  const CURRENCY_BEFORE = new RegExp(`(?:US\\s?\\$|\\$|€|£|USD|EUR|GBP|SEK)\\s*(${AMOUNT})`, 'i');
   const CURRENCY_AFTER = new RegExp(`(${AMOUNT})\\s*(?:USD|EUR|GBP|SEK|NOK|DKK|kr|US\\s?\\$|\\$|€|£)`, 'i');
+  const ARIA_PRICE = new RegExp(
+    `^\\s*(?:US\\s?\\$|\\$|€|£|SEK)?\\s*(${AMOUNT})\\s*(?:kr|SEK|USD|EUR|GBP)?\\s*$`, 'i');
 
   function getPrice(card) {
-    // AliExpress price markup uses hashed class names with no "price" in
-    // them, so the currency-anchored text match is the primary path here;
-    // the element branch kicks in if they ever ship semantic classes again.
-    const el = card.querySelector('[class*="price"]');
-    if (el) {
-      // Inside a dedicated price element the first number IS the (min/sale)
-      // price. Currency-adjacency matching would grab the range maximum for
-      // suffix currencies ("70,11-761,83 SEK"), so don't use it here.
-      const m = el.textContent.match(new RegExp(AMOUNT));
-      return m ? parseAmount(m[0]) : null;
+    // The price container carries the complete price as an aria-label
+    // (e.g. aria-label="1 481,77kr") — the only clean per-card price marker
+    // in AliExpress's hashed-class markup. Require a currency marker so
+    // rating/count labels can't qualify.
+    for (const el of card.querySelectorAll('[aria-label]')) {
+      const label = el.getAttribute('aria-label');
+      if (!label || !/\d/.test(label) || !/kr|SEK|USD|EUR|GBP|\$|€|£/i.test(label)) continue;
+      const m = label.match(ARIA_PRICE);
+      if (m) return parseAmount(m[1]);
     }
-    // The sale price precedes the crossed-out original in the card text, so
-    // the first currency-adjacent amount is the right sort key.
+    // Fallback: currency-adjacent amount in the card text. The sale price
+    // precedes the crossed-out original, so the first match is the sort key.
     const m = card.textContent.match(CURRENCY_BEFORE) || card.textContent.match(CURRENCY_AFTER);
     return m ? parseAmount(m[1]) : null;
   }
