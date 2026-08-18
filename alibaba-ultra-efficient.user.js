@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Alibaba Ultra Efficient
 // @namespace    mathias.alibaba.ultra
-// @version      1.7
+// @version      1.8
 // @description  Filter out irrelevant Alibaba search results, optionally hide sponsored items, and sort results by price (client-side). Inspired by "AliExpress Ultra Efficient".
 // @homepageURL  https://github.com/mathiasm74/alibaba-ultra-efficient
 // @supportURL   https://github.com/mathiasm74/alibaba-ultra-efficient/issues
@@ -178,6 +178,8 @@
     el.style.display = '';
     el.style.opacity = '';
     el.style.filter = '';
+    el.style.outline = '';
+    el.style.outlineOffset = '';
   }
 
   // Locate the main results grid: the deepest element containing >=60% of
@@ -331,8 +333,11 @@
   // while wiping the inline styles — trusting the stamp alone then leaves
   // "zombie" cards: counted as hidden but fully visible. Verify the styling.
   function styleMatches(card, state) {
-    if (state === 'ok') return card.style.display !== 'none' && card.style.opacity === '';
+    if (state === 'ok') {
+      return card.style.display !== 'none' && card.style.opacity === '' && card.style.outline === '';
+    }
     if (settings.mode === 'hide') return card.style.display === 'none';
+    if (settings.mode === 'debug') return card.style.outline !== '';
     return card.style.opacity === '0.45';
   }
 
@@ -354,20 +359,36 @@
       card.style.display = '';
       card.style.opacity = '';
       card.style.filter = '';
+      card.style.outline = '';
+      card.style.outlineOffset = '';
     }
   }
+
+  // Debug mode marks filtered cards instead of hiding them, so
+  // misclassifications identify themselves on screen.
+  const DEBUG_COLORS = { sponsored: '#e5484d', irrelevant: '#f5a524', duplicate: '#9353d3' };
 
   function restyleCard(card, state) {
     if (state === 'ok') {
       card.style.display = '';
       card.style.opacity = '';
       card.style.filter = '';
+      card.style.outline = '';
+      card.style.outlineOffset = '';
     } else if (settings.mode === 'hide') {
       card.style.display = 'none';
+    } else if (settings.mode === 'debug') {
+      card.style.display = '';
+      card.style.opacity = '';
+      card.style.filter = '';
+      card.style.outline = `3px solid ${DEBUG_COLORS[state] || '#888'}`;
+      card.style.outlineOffset = '-3px';
     } else {
       card.style.display = '';
       card.style.opacity = '0.45';
       card.style.filter = 'grayscale(1)';
+      card.style.outline = '';
+      card.style.outlineOffset = '';
     }
   }
 
@@ -517,6 +538,7 @@
         <select id="aue-mode">
           <option value="hide">hide</option>
           <option value="dim">dim</option>
+          <option value="debug">mark (debug)</option>
         </select>
       </label>
       <label>Hide sponsored <input type="checkbox" id="aue-ads"></label>
