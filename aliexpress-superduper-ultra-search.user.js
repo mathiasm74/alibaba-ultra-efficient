@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AliExpress SuperDuper Ultra Search
 // @namespace    mathias.aliexpress.ultra
-// @version      2.3
-// @description  Filter out irrelevant AliExpress search results, hide sponsored items and duplicates, and sort results by price (client-side). A modern rebuild of the classic "AliExpress Ultra Efficient".
+// @version      2.4
+// @description  Filter out irrelevant AliExpress search results, hide sponsored items and duplicates, fetch shipping costs, and sort results by total price (client-side). A modern rebuild of the classic "AliExpress Ultra Efficient".
 // @homepageURL  https://github.com/mathiasm74/superduper-ultra-ali-search
 // @supportURL   https://github.com/mathiasm74/superduper-ultra-ali-search/issues
 // @downloadURL  https://raw.githubusercontent.com/mathiasm74/superduper-ultra-ali-search/main/aliexpress-superduper-ultra-search.user.js
@@ -15,6 +15,8 @@
 // @match        https://*.aliexpress.us/wholesale*
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM_deleteValue
+// @grant        unsafeWindow
 // @run-at       document-idle
 // @noframes
 // ==/UserScript==
@@ -44,6 +46,9 @@
     // ("29,49", "1 481"). Empty = no bound.
     minPrice: '',
     maxPrice: '',
+    // Fetch each kept item's page for its shipping cost and show/sort/filter
+    // by the total price. Fetched fees are cached.
+    includeShipping: true,
   };
 
   const settings = Object.assign({}, DEFAULTS, GM_getValue('settings', {}));
@@ -332,20 +337,32 @@
   const ARIA_PRICE = new RegExp(
     `^\\s*(?:US\\s?\\$|\\$|€|£|SEK)?\\s*(${AMOUNT})\\s*(?:kr|SEK|USD|EUR|GBP)?\\s*$`, 'i');
 
-  function getPrice(card) {
-    // The price container carries the complete price as an aria-label
-    // (e.g. aria-label="1 481,77kr") — the only clean per-card price marker
-    // in AliExpress's hashed-class markup. Require a currency marker so
-    // rating/count labels can't qualify.
+  // The price container carries the complete price as an aria-label
+  // (e.g. aria-label="1 481,77kr") — the only clean per-card price marker
+  // in AliExpress's hashed-class markup. Require a currency marker so
+  // rating/count labels can't qualify.
+  function priceElement(card) {
     for (const el of card.querySelectorAll('[aria-label]')) {
       const label = el.getAttribute('aria-label');
       if (!label || !/\d/.test(label) || !/kr|SEK|USD|EUR|GBP|\$|€|£/i.test(label)) continue;
-      const m = label.match(ARIA_PRICE);
+      if (ARIA_PRICE.test(label)) return el;
+    }
+    return null;
+  }
+
+  function getPrice(card) {
+    const priceEl = priceElement(card);
+    if (priceEl) {
+      const m = priceEl.getAttribute('aria-label').match(ARIA_PRICE);
       if (m) return parseAmount(m[1]);
     }
-    // Fallback: currency-adjacent amount in the card text. The sale price
+    // Fallback: currency-adjacent amount in the card text — minus our own
+    // shipping badge, whose amounts would otherwise match. The sale price
     // precedes the crossed-out original, so the first match is the sort key.
-    const m = card.textContent.match(CURRENCY_BEFORE) || card.textContent.match(CURRENCY_AFTER);
+    let text = card.textContent;
+    const badge = card.querySelector('.aue-ship');
+    if (badge) text = text.replace(badge.textContent, '');
+    const m = text.match(CURRENCY_BEFORE) || text.match(CURRENCY_AFTER);
     return m ? parseAmount(m[1]) : null;
   }
 
@@ -361,6 +378,375 @@
       if (t.length <= 12 && /^(ad|ads|sponsored)$/i.test(t)) return true;
     }
     return false;
+  }
+
+  // ---------------------------------------------------------------- shipping
+
+  // Search cards show the item price without shipping. For every card that
+  // survives filtering, the shipping fee is looked up and the card then
+  // shows and sorts by the total price. Sources, in order:
+  //  1. the card's own "Free shipping" badge (no request needed);
+  //  2. the pdp API (mtop.aliexpress.pdp.pc.query) — the same call the item
+  //     page makes on load; the item page itself is a client-rendered shell
+  //     with no shipping data in its HTML. The call runs with the user's
+  //     session cookies, so fees match their ship-to country and currency.
+  // Requests run one at a time, ~1s apart, and fees are cached in GM storage
+  // so pagination and revisits don't re-hit the server.
+
+  const SHIP_TTL = 24 * 3600 * 1000;         // known fees stay fresh a day
+  const SHIP_UNKNOWN_TTL = 6 * 3600 * 1000;  // retry unparsable pages sooner
+  const SHIP_CACHE_MAX = 1000;
+  const SHIP_MAX_FAILURES = 3;
+
+  // v2 key: 'shipCache' (v1) held null entries from a defunct HTML-scraping
+  // fetcher, which would wrongly suppress lookups for their whole TTL.
+  const shipCache = GM_getValue('shipCacheV2', {});
+  GM_deleteValue('shipCache');
+  let shipSaveTimer = null;
+
+  // Sub-fields of the aep_usuc_f site cookie, whose value is itself a query
+  // string ("site=glo&c_tp=SEK&region=SE&b_locale=en_US&…").
+  function siteCookieField(key) {
+    const m = document.cookie.match(/aep_usuc_f=([^;]*)/);
+    if (!m) return '';
+    const v = new URLSearchParams(m[1]).get(key) || '';
+    try { return decodeURIComponent(v); } catch { return v; }
+  }
+
+  // The fee depends on the ship-to country and display currency — so they
+  // are part of the cache key.
+  const SHIP_CTX = `${siteCookieField('region')}:${siteCookieField('c_tp')}`;
+
+  const shipKey = (id) => `${SHIP_CTX}|${id}`;
+
+  // Cache entries: {f: fee number | null (page had no readable fee),
+  //                 d: fee as the site formats it ("kr58,71"), t: timestamp}
+  function shipEntry(id) {
+    const e = shipCache[shipKey(id)];
+    if (!e) return null;
+    const ttl = typeof e.f === 'number' ? SHIP_TTL : SHIP_UNKNOWN_TTL;
+    return Date.now() - e.t < ttl ? e : null;
+  }
+
+  function shippingFee(id) {
+    const e = shipEntry(id);
+    return e && typeof e.f === 'number' ? e.f : null;
+  }
+
+  function saveShipCache() {
+    clearTimeout(shipSaveTimer);
+    shipSaveTimer = setTimeout(() => {
+      const keys = Object.keys(shipCache);
+      if (keys.length > SHIP_CACHE_MAX) {
+        keys.sort((a, b) => shipCache[a].t - shipCache[b].t);
+        for (const k of keys.slice(0, keys.length - SHIP_CACHE_MAX)) delete shipCache[k];
+      }
+      GM_setValue('shipCacheV2', shipCache);
+    }, 1500);
+  }
+
+  // Walk pdp API data for shipping options. The delivery component's
+  // entries carry {shippingFee: 'free'|'charge', displayAmount,
+  // formattedAmount}; other layouts nest a freightAmount money object.
+  function collectShipOptions(node, out, depth) {
+    if (!node || typeof node !== 'object' || depth > 40) return;
+    if (Array.isArray(node)) {
+      for (const v of node) collectShipOptions(v, out, depth + 1);
+      return;
+    }
+    if (node.shippingFee === 'free') {
+      out.push({ fee: 0, text: '' });
+    } else if ('shippingFee' in node) {
+      const amount = parseFloat(node.displayAmount);
+      if (!isNaN(amount)) out.push({ fee: amount, text: String(node.formattedAmount || '') });
+    }
+    const fa = node.freightAmount;
+    if (fa && typeof fa === 'object') {
+      const amount = parseFloat(fa.value);
+      if (!isNaN(amount)) {
+        out.push({ fee: amount, text: String(fa.formatedAmount || fa.formattedAmount || '') });
+      }
+    }
+    for (const k in node) collectShipOptions(node[k], out, depth + 1);
+  }
+
+  // Scan delivery/freight-named subtrees first: the response can also embed
+  // other products (bundles, recommendations), and a whole-tree scan could
+  // pick up one of their shipping markers instead of this item's.
+  function extractFees(root) {
+    const options = [];
+    (function findComponents(node, depth) {
+      if (!node || typeof node !== 'object' || depth > 12) return;
+      for (const k in node) {
+        if (/freight|delivery|shipping/i.test(k) && node[k] && typeof node[k] === 'object') {
+          collectShipOptions(node[k], options, 0);
+        } else {
+          findComponents(node[k], depth + 1);
+        }
+      }
+    })(root, 0);
+    if (!options.length) collectShipOptions(root, options, 0);
+    if (!options.length) return null;
+    return options.reduce((a, b) => (a.fee <= b.fee ? a : b));
+  }
+
+  // ----- mtop API client (how every aliexpress page talks to its backend)
+
+  const MTOP_APPKEY = '12574478';
+  const MAIN_DOMAIN = location.hostname.split('.').slice(-2).join('.');
+
+  // Compact MD5 (RFC 1321) of a JS string, UTF-8 encoded — mtop requests are
+  // signed with it and WebCrypto offers no MD5.
+  function md5(input) {
+    const s = unescape(encodeURIComponent(input));
+    const K = [...Array(64)].map((_, i) => Math.floor(Math.abs(Math.sin(i + 1)) * 2 ** 32));
+    const R = [7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+      5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+      4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+      6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21];
+    const n = s.length;
+    const words = new Array((((n + 8) >> 6) + 1) * 16).fill(0);
+    for (let i = 0; i < n; i++) words[i >> 2] |= s.charCodeAt(i) << ((i % 4) * 8);
+    words[n >> 2] |= 0x80 << ((n % 4) * 8);
+    words[words.length - 2] = n * 8;
+    let a = 0x67452301, b = 0xefcdab89, c = 0x98badcfe, d = 0x10325476;
+    for (let i = 0; i < words.length; i += 16) {
+      let [A, B, C, D] = [a, b, c, d];
+      for (let j = 0; j < 64; j++) {
+        let f, g;
+        if (j < 16) { f = (B & C) | (~B & D); g = j; }
+        else if (j < 32) { f = (D & B) | (~D & C); g = (5 * j + 1) % 16; }
+        else if (j < 48) { f = B ^ C ^ D; g = (3 * j + 5) % 16; }
+        else { f = C ^ (B | ~D); g = (7 * j) % 16; }
+        const tmp = D;
+        D = C; C = B;
+        const x = (A + f + K[j] + words[i + g]) | 0;
+        B = (B + ((x << R[j]) | (x >>> (32 - R[j])))) | 0;
+        A = tmp;
+      }
+      a = (a + A) | 0; b = (b + B) | 0; c = (c + C) | 0; d = (d + D) | 0;
+    }
+    return [a, b, c, d].map((x) =>
+      [0, 8, 16, 24].map((sh) => ((x >>> sh) & 255).toString(16).padStart(2, '0')).join('')
+    ).join('');
+  }
+
+  // JSONP transport, in case the fetch is CORS-blocked: the response script
+  // runs in the page context, so the callback must live on the page window.
+  let jsonpCounter = 0;
+  function mtopJsonp(base, params) {
+    return new Promise((resolve, reject) => {
+      const cb = `mtopjsonpaue${++jsonpCounter}`;
+      const w = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+      const p = new URLSearchParams(params);
+      p.set('dataType', 'originaljsonp');
+      p.set('callback', cb);
+      const script = document.createElement('script');
+      let timer = null;
+      const finish = (fn) => (arg) => {
+        clearTimeout(timer);
+        try { delete w[cb]; } catch { /* some pages seal window */ }
+        script.remove();
+        fn(arg);
+      };
+      const ok = finish(resolve);
+      const fail = finish(reject);
+      w[cb] = ok;
+      script.onerror = () => fail(new Error('mtop: JSONP failed to load'));
+      timer = setTimeout(() => fail(new Error('mtop: JSONP timeout')), 10000);
+      script.src = `${base}?${p}`;
+      document.head.appendChild(script);
+    });
+  }
+
+  async function mtopRequest(api, dataStr) {
+    // The signing token lives in the _m_h5_tk cookie. When it's missing or
+    // stale the gateway rejects the call but sets a fresh token cookie in
+    // that same response, so a retry then succeeds.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const token = (document.cookie.match(/_m_h5_tk=([^_;]+)_/) || [])[1] || '';
+      const t = Date.now();
+      const params = new URLSearchParams({
+        jsv: '2.5.1',
+        appKey: MTOP_APPKEY,
+        t: String(t),
+        sign: md5(`${token}&${t}&${MTOP_APPKEY}&${dataStr}`),
+        api,
+        v: '1.0',
+        type: 'originaljson',
+        dataType: 'originaljson',
+        timeout: '15000',
+        data: dataStr,
+      });
+      const base = `https://acs.${MAIN_DOMAIN}/h5/${api.toLowerCase()}/1.0/`;
+      let json;
+      try {
+        const res = await fetch(`${base}?${params}`, { credentials: 'include' });
+        json = await res.json();
+      } catch {
+        json = await mtopJsonp(base, params);
+      }
+      const ret = String((json && json.ret && json.ret[0]) || 'empty response');
+      if (ret.startsWith('SUCCESS')) return json.data;
+      // Anything else (RGV587_ERROR = rate-limited/captcha, FAIL_SYS_…) is a
+      // real failure the queue should back off from.
+      if (!/TOKEN_EMPTY|TOKEN_EXPIRED|ILLEGAL_ACCESS/i.test(ret)) {
+        throw new Error(`mtop: ${ret}`);
+      }
+    }
+    throw new Error('mtop: could not obtain an API token');
+  }
+
+  // The exact payload the item page's own prefetch builds for this API
+  // (field list lifted from its inline bootstrap script).
+  function pdpQueryData(id) {
+    let region = siteCookieField('region') || 'US';
+    if (region === 'CN') region = 'US';
+    const locale = siteCookieField('b_locale') || 'en_US';
+    return JSON.stringify({
+      productId: id,
+      _lang: `${locale.split('_')[0] || 'en'}_${region}`,
+      _currency: siteCookieField('c_tp') || 'USD',
+      country: region,
+      province: siteCookieField('province'),
+      city: siteCookieField('city'),
+      channel: '',
+      pdp_ext_f: '',
+      pdpNPI: '',
+      sourceType: '',
+      clientType: 'pc',
+      ext: '{}',
+    });
+  }
+
+  async function fetchShipping(id) {
+    const data = await mtopRequest('mtop.aliexpress.pdp.pc.query', pdpQueryData(id));
+    return extractFees(data); // null = response ok, but no readable fee
+  }
+
+  // The search cards themselves often settle it without any request: a plain
+  // "Free shipping" badge, or "Free shipping over 100kr" when the item's own
+  // price already clears the threshold.
+  function cardShipsFree(card) {
+    for (const el of card.querySelectorAll('span, div')) {
+      const t = el.textContent.trim();
+      if (!t || t.length > 40 || !/^free shipping/i.test(t)) continue;
+      if (/^free shipping$/i.test(t)) return true;
+      const over = t.match(/^free shipping (?:on orders )?over (.+)$/i);
+      if (over) {
+        const threshold = parseAmount(over[1].replace(/^[^\d]+/, ''));
+        const p = getPrice(card);
+        if (threshold !== null && p !== null && p >= threshold) return true;
+      }
+    }
+    return false;
+  }
+
+  const shipQueue = [];
+  const shipQueued = new Set();
+  let shipPumping = false;
+  let shipFailures = 0;
+  let okIds = new Set(); // product ids kept by the last apply()
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  function queueShipping(id) {
+    if (shipFailures >= SHIP_MAX_FAILURES) return;
+    if (shipQueued.has(id) || shipEntry(id)) return;
+    shipQueued.add(id);
+    shipQueue.push(id);
+    pumpShipQueue();
+  }
+
+  async function pumpShipQueue() {
+    if (shipPumping) return;
+    shipPumping = true;
+    try {
+      while (shipQueue.length) {
+        const id = shipQueue.shift();
+        shipQueued.delete(id);
+        // The card may have been filtered out (or the setting turned off)
+        // since it was queued — only ever fetch for items on display.
+        if (!settings.includeShipping || !okIds.has(id) || shipEntry(id)) continue;
+        try {
+          const opt = await fetchShipping(id);
+          shipCache[shipKey(id)] = opt
+            ? { f: opt.fee, d: opt.text, t: Date.now() }
+            : { f: null, t: Date.now() };
+          shipFailures = 0;
+          saveShipCache();
+          console.debug('[AliExpress SuperDuper Ultra Search] shipping for', id,
+            opt ? `= ${opt.text || opt.fee}` : ': no fee in the API response');
+          scheduleApply(); // re-render badges / re-sort with the new fee
+        } catch (e) {
+          shipFailures++;
+          console.warn('[AliExpress SuperDuper Ultra Search] shipping fetch failed:', e.message);
+          if (shipFailures >= SHIP_MAX_FAILURES) {
+            console.warn('[AliExpress SuperDuper Ultra Search]',
+              'pausing shipping fetches — AliExpress may be rate-limiting');
+            shipQueue.length = 0;
+            shipQueued.clear();
+            updatePanel();
+          }
+        }
+        await sleep(800 + Math.random() * 700);
+      }
+    } finally {
+      shipPumping = false;
+    }
+  }
+
+  // Total price (item + shipping) when the fee is known; the bare item price
+  // otherwise. Sorting and the price-range filter both use this.
+  function getTotalPrice(card) {
+    const p = getPrice(card);
+    if (p === null || !settings.includeShipping) return p;
+    const id = cardProductId(card);
+    const fee = id ? shippingFee(id) : null;
+    return fee === null ? p : p + fee;
+  }
+
+  // Format `value` the way `sample` (a site-scraped price string like
+  // "kr58,71" or "$3.99") formats its amount: same currency token on the
+  // same side, same decimal separator.
+  function formatLike(sample, value) {
+    const s = sample || '';
+    const sym = s.replace(/[\d\s  .,]/g, '');
+    let num = value.toFixed(2);
+    if (/,\d{1,2}\D*$/.test(s)) num = num.replace('.', ',');
+    if (!sym) return num;
+    return /^\d/.test(s.trim()) ? num + sym : sym + num;
+  }
+
+  function updateShipBadge(card) {
+    const id = cardProductId(card);
+    const entry = settings.includeShipping && id ? shipEntry(id) : null;
+    const fee = entry && typeof entry.f === 'number' ? entry.f : null;
+    let text = '';
+    if (fee === 0) {
+      text = 'free shipping';
+    } else if (fee !== null) {
+      const base = getPrice(card);
+      const feeText = entry.d || fee.toFixed(2);
+      text = base !== null
+        ? `+${feeText} shipping = ${formatLike(entry.d, base + fee)}`
+        : `+${feeText} shipping`;
+    }
+    let badge = card.querySelector('.aue-ship');
+    if (!text) {
+      if (badge) badge.remove();
+      return;
+    }
+    if (badge && badge.textContent === text) return;
+    if (!badge) {
+      badge = document.createElement('div');
+      badge.className = 'aue-ship';
+      // Right under the price if it can be found, else at the card's end
+      const anchor = priceElement(card);
+      if (anchor) anchor.insertAdjacentElement('afterend', badge);
+      else visualTarget(card).appendChild(badge);
+    }
+    badge.textContent = text;
   }
 
   // -------------------------------------------------------------- filtering
@@ -457,7 +843,7 @@
       for (const [parent, group] of byParent) {
         if (group.length < 2) continue;
         const sorted = [...group].sort((a, b) => {
-          const pa = getPrice(a), pb = getPrice(b);
+          const pa = getTotalPrice(a), pb = getTotalPrice(b);
           if (pa === null && pb === null) return 0;
           if (pa === null) return 1;
           if (pb === null) return -1;
@@ -468,8 +854,8 @@
         // apply() would churn the observer (and fight site re-renders).
         if (sorted.every((card, i) => card === group[i])) continue;
         for (const card of sorted) parent.appendChild(card);
-        console.debug('[AliExpress SuperDuper Ultra Search] sorted prices:',
-          sorted.slice(0, 20).map((c) => getPrice(c)));
+        console.debug('[AliExpress SuperDuper Ultra Search] sorted prices (incl. shipping when known):',
+          sorted.slice(0, 20).map((c) => getTotalPrice(c)));
       }
     } finally {
       mutatingOurselves = false;
@@ -501,10 +887,11 @@
         `ignoring ${allCards.length - cards.length} cards the site itself hides`);
     }
 
-    // A card with an unparsable price is never price-filtered (fail open)
+    // A card with an unparsable price is never price-filtered (fail open).
+    // The bound applies to the total incl. shipping once the fee is known.
     const priceOutOfRange = (card) => {
       if (minPrice === null && maxPrice === null) return false;
-      const p = getPrice(card);
+      const p = getTotalPrice(card);
       if (p === null) return false;
       return (minPrice !== null && p < minPrice) || (maxPrice !== null && p > maxPrice);
     };
@@ -542,8 +929,23 @@
       } else {
         setCardState(card, 'ok');
         counts.shown++;
-        if (id) keptIds.add(id);
+        if (id) {
+          keptIds.add(id);
+          // The card's own badge can settle it for free — no request needed
+          if (settings.includeShipping && !shipEntry(id) && cardShipsFree(card)) {
+            shipCache[shipKey(id)] = { f: 0, d: '', t: Date.now() };
+            saveShipCache();
+          }
+        }
       }
+      updateShipBadge(card);
+    }
+
+    // Fetch shipping only for the cards that survived filtering; anything
+    // hidden above never triggers a request.
+    okIds = keptIds;
+    if (settings.includeShipping) {
+      for (const id of keptIds) queueShipping(id);
     }
 
     if (settings.sortByPrice) sortCards(cards);
@@ -568,9 +970,18 @@
   function updatePanel() {
     if (!panel) return;
     const c = lastCounts;
-    panel.querySelector('#aue-counts').textContent =
+    let text =
       `${c.shown}/${c.total} shown · ${c.filtered} off-topic · ${c.sponsored} ads · ` +
       `${c.duplicates} dupes` + (c.priced ? ` · ${c.priced} priced out` : '');
+    if (settings.includeShipping && okIds.size) {
+      if (shipFailures >= SHIP_MAX_FAILURES) {
+        text += ' · shipping paused';
+      } else {
+        const known = [...okIds].filter((id) => shipEntry(id)).length;
+        if (known < okIds.size) text += ` · shipping ${known}/${okIds.size}`;
+      }
+    }
+    panel.querySelector('#aue-counts').textContent = text;
   }
 
   function buildPanel() {
@@ -594,6 +1005,7 @@
         #aue-panel input[type="text"] { background: #333; color: #eee; border: 1px solid #555; border-radius: 4px; padding: 1px 4px; width: 165px; }
         #aue-panel #aue-min, #aue-panel #aue-max { width: 46px; }
         #aue-panel #aue-counts { color: #9ad; }
+        .aue-ship { font: 12px/1.4 -apple-system, "Segoe UI", sans-serif; color: #0a7a4b; }
       </style>
       <div id="aue-header"><span>AliExpress SuperDuper Ultra Search</span><span id="aue-toggle">–</span></div>
       <div id="aue-counts"></div>
@@ -614,6 +1026,7 @@
       </label>
       <label>Hide sponsored <input type="checkbox" id="aue-ads"></label>
       <label>Sort by price <input type="checkbox" id="aue-sort"></label>
+      <label>Add shipping to prices <input type="checkbox" id="aue-shipping"></label>
       <label>Require words
         <input type="text" id="aue-include" placeholder="word &quot;a phrase&quot;">
       </label>
@@ -631,6 +1044,7 @@
     $('#aue-mode').value = settings.mode;
     $('#aue-ads').checked = settings.hideSponsored;
     $('#aue-sort').checked = settings.sortByPrice;
+    $('#aue-shipping').checked = settings.includeShipping;
     $('#aue-include').value = settings.includeTerms;
     $('#aue-exclude').value = settings.excludeTerms;
     $('#aue-min').value = settings.minPrice;
@@ -655,6 +1069,9 @@
       settings.sortByPrice = e.target.checked; saveSettings();
       if (settings.sortByPrice) apply();
       else location.reload(); // restore the original order
+    });
+    $('#aue-shipping').addEventListener('change', (e) => {
+      settings.includeShipping = e.target.checked; saveSettings(); apply();
     });
     // 'change' fires on Enter or when the field loses focus
     $('#aue-include').addEventListener('change', (e) => {
