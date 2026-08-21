@@ -39,11 +39,16 @@ by required words, the rest dimmed](screenshot-aliexpress.png)
   `mtop.aliexpress.pdp.pc.query` call the item page makes on load — the item
   page HTML itself is a client-rendered shell with no shipping data). Only
   items that survive filtering are requested — one at a time, ~1s apart,
-  backing off if AliExpress starts blocking — and fees are cached for a day
+  backing off if AliExpress starts blocking, with a progress bar in the panel
+  while fees load — and fees are cached for a day
   per ship-to country and currency, so pagination and repeat searches don't
-  re-hit the server. Toggle: "Add shipping to prices".
+  re-hit the server. Toggle: "Add shipping to prices". A second toggle,
+  "Assume free-shipping limit met", treats "Free shipping over X" badges as
+  free even when the item alone stays under X — for orders that will reach it.
 - **Control panel** — bottom-left overlay with live counts
-  ("37/60 shown · 12 off-topic · 10 ads · 1 dupes") and all toggles; settings persist.
+  ("37/60 shown · 12 off-topic · 10 ads · 1 dupes") and all toggles; settings
+  persist. An Enabled switch (AliExpress) turns the whole script off and
+  restores the page, without uninstalling.
 
 ## Install
 

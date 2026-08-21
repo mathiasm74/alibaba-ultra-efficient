@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AliExpress SuperDuper Ultra Search
 // @namespace    mathias.aliexpress.ultra
-// @version      2.4
+// @version      2.7
 // @description  Filter out irrelevant AliExpress search results, hide sponsored items and duplicates, fetch shipping costs, and sort results by total price (client-side). A modern rebuild of the classic "AliExpress Ultra Efficient".
 // @homepageURL  https://github.com/mathiasm74/superduper-ultra-ali-search
 // @supportURL   https://github.com/mathiasm74/superduper-ultra-ali-search/issues
@@ -27,6 +27,9 @@
   // ---------------------------------------------------------------- settings
 
   const DEFAULTS = {
+    // Master switch: off restores the page as if the script weren't installed
+    // (the panel stays, so it can be turned back on).
+    enabled: true,
     // Minimum fraction of your search words that must appear in a product
     // title for it to be considered relevant.
     // 'all' = 1.0, 'most' = 0.75, 'half' = 0.5, 'any' = one word, 'off' = no filtering
@@ -49,6 +52,9 @@
     // Fetch each kept item's page for its shipping cost and show/sort/filter
     // by the total price. Fetched fees are cached.
     includeShipping: true,
+    // Treat "Free shipping over X" as free even when the item alone doesn't
+    // reach X — for orders that will.
+    assumeFreeLimit: false,
   };
 
   const settings = Object.assign({}, DEFAULTS, GM_getValue('settings', {}));
@@ -626,27 +632,38 @@
 
   // The search cards themselves often settle it without any request: a plain
   // "Free shipping" badge, or "Free shipping over 100kr" when the item's own
-  // price already clears the threshold.
+  // price already clears the threshold. Returns 'free' for those, 'over' for
+  // a threshold badge the item doesn't clear on its own (free only if the
+  // order reaches the limit — see the assumeFreeLimit setting), else null.
   function cardShipsFree(card) {
+    let status = null;
     for (const el of card.querySelectorAll('span, div')) {
       const t = el.textContent.trim();
       if (!t || t.length > 40 || !/^free shipping/i.test(t)) continue;
-      if (/^free shipping$/i.test(t)) return true;
+      if (/^free shipping$/i.test(t)) return 'free';
       const over = t.match(/^free shipping (?:on orders )?over (.+)$/i);
       if (over) {
         const threshold = parseAmount(over[1].replace(/^[^\d]+/, ''));
         const p = getPrice(card);
-        if (threshold !== null && p !== null && p >= threshold) return true;
+        if (threshold !== null && p !== null && p >= threshold) return 'free';
+        status = 'over';
       }
     }
-    return false;
+    return status;
+  }
+
+  // The assumption is a preference, not data — it must never enter the
+  // persistent cache, so that toggling it off falls back to real fees.
+  function assumedFreeShipping(card) {
+    return settings.assumeFreeLimit && cardShipsFree(card) === 'over';
   }
 
   const shipQueue = [];
   const shipQueued = new Set();
   let shipPumping = false;
   let shipFailures = 0;
-  let okIds = new Set(); // product ids kept by the last apply()
+  let okIds = new Set();       // product ids kept by the last apply()
+  let assumedOkIds = new Set(); // kept ids whose shipping is assumed free
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -677,7 +694,8 @@
           saveShipCache();
           console.debug('[AliExpress SuperDuper Ultra Search] shipping for', id,
             opt ? `= ${opt.text || opt.fee}` : ': no fee in the API response');
-          scheduleApply(); // re-render badges / re-sort with the new fee
+          updatePanel();   // tick the progress bar right away…
+          scheduleApply(); // …and re-render badges / re-sort with the new fee
         } catch (e) {
           shipFailures++;
           console.warn('[AliExpress SuperDuper Ultra Search] shipping fetch failed:', e.message);
@@ -701,6 +719,7 @@
   function getTotalPrice(card) {
     const p = getPrice(card);
     if (p === null || !settings.includeShipping) return p;
+    if (assumedFreeShipping(card)) return p;
     const id = cardProductId(card);
     const fee = id ? shippingFee(id) : null;
     return fee === null ? p : p + fee;
@@ -723,7 +742,9 @@
     const entry = settings.includeShipping && id ? shipEntry(id) : null;
     const fee = entry && typeof entry.f === 'number' ? entry.f : null;
     let text = '';
-    if (fee === 0) {
+    if (settings.includeShipping && assumedFreeShipping(card)) {
+      text = 'free shipping (assumed)';
+    } else if (fee === 0) {
       text = 'free shipping';
     } else if (fee !== null) {
       const base = getPrice(card);
@@ -867,6 +888,7 @@
   let lastCounts = { shown: 0, filtered: 0, sponsored: 0, duplicates: 0, priced: 0, total: 0 };
 
   function apply() {
+    if (!settings.enabled) { updatePanel(); return; }
     const { required, excluded, optional } = parseQuery(getQueryText());
     required.push(...parseTermList(settings.includeTerms));
     excluded.push(...parseTermList(settings.excludeTerms));
@@ -902,6 +924,7 @@
     // Only listings we actually kept count, so hiding an ad never causes its
     // organic twin to be hidden as a "duplicate" too.
     const keptIds = new Set();
+    const assumedIds = new Set();
     const adTitles = [];
     for (const card of cards) {
       const title = getTitle(card);
@@ -931,10 +954,14 @@
         counts.shown++;
         if (id) {
           keptIds.add(id);
-          // The card's own badge can settle it for free — no request needed
-          if (settings.includeShipping && !shipEntry(id) && cardShipsFree(card)) {
-            shipCache[shipKey(id)] = { f: 0, d: '', t: Date.now() };
-            saveShipCache();
+          if (settings.includeShipping && !shipEntry(id)) {
+            // The card's own badge can settle it for free — no request needed
+            if (cardShipsFree(card) === 'free') {
+              shipCache[shipKey(id)] = { f: 0, d: '', t: Date.now() };
+              saveShipCache();
+            } else if (assumedFreeShipping(card)) {
+              assumedIds.add(id);
+            }
           }
         }
       }
@@ -942,10 +969,14 @@
     }
 
     // Fetch shipping only for the cards that survived filtering; anything
-    // hidden above never triggers a request.
+    // hidden above never triggers a request, and neither do cards whose
+    // shipping is assumed free.
     okIds = keptIds;
+    assumedOkIds = assumedIds;
     if (settings.includeShipping) {
-      for (const id of keptIds) queueShipping(id);
+      for (const id of keptIds) {
+        if (!assumedIds.has(id)) queueShipping(id);
+      }
     }
 
     if (settings.sortByPrice) sortCards(cards);
@@ -967,20 +998,48 @@
 
   let panel;
 
+  // Undo everything the script did to the page (the panel itself stays)
+  function switchOff() {
+    clearTimeout(debounceTimer);
+    resetCardStates();
+    for (const badge of document.querySelectorAll('.aue-ship')) badge.remove();
+    okIds = new Set();
+    assumedOkIds = new Set();
+    shipQueue.length = 0;
+    shipQueued.clear();
+    panel.classList.add('aue-off');
+    updatePanel();
+  }
+
   function updatePanel() {
     if (!panel) return;
+    const progress = panel.querySelector('#aue-progress');
+    if (!settings.enabled) {
+      panel.querySelector('#aue-counts').textContent = 'off';
+      progress.hidden = true;
+      return;
+    }
     const c = lastCounts;
     let text =
       `${c.shown}/${c.total} shown · ${c.filtered} off-topic · ${c.sponsored} ads · ` +
       `${c.duplicates} dupes` + (c.priced ? ` · ${c.priced} priced out` : '');
+    let pending = false;
     if (settings.includeShipping && okIds.size) {
       if (shipFailures >= SHIP_MAX_FAILURES) {
         text += ' · shipping paused';
       } else {
-        const known = [...okIds].filter((id) => shipEntry(id)).length;
-        if (known < okIds.size) text += ` · shipping ${known}/${okIds.size}`;
+        // Assumed-free cards need no lookup, so they don't count as pending
+        const wanted = [...okIds].filter((id) => !assumedOkIds.has(id));
+        const known = wanted.filter((id) => shipEntry(id)).length;
+        if (known < wanted.length) {
+          pending = true;
+          panel.querySelector('#aue-progress-bar').style.width =
+            `${Math.round((known / wanted.length) * 100)}%`;
+          panel.querySelector('#aue-progress-count').textContent = `${known}/${wanted.length}`;
+        }
       }
     }
+    progress.hidden = !pending;
     panel.querySelector('#aue-counts').textContent = text;
   }
 
@@ -1005,10 +1064,21 @@
         #aue-panel input[type="text"] { background: #333; color: #eee; border: 1px solid #555; border-radius: 4px; padding: 1px 4px; width: 165px; }
         #aue-panel #aue-min, #aue-panel #aue-max { width: 46px; }
         #aue-panel #aue-counts { color: #9ad; }
+        #aue-panel.aue-off > label:not(#aue-enabled-row) { opacity: 0.45; pointer-events: none; }
+        #aue-panel #aue-progress { display: flex; align-items: center; gap: 6px; color: #9ad; }
+        #aue-panel #aue-progress[hidden] { display: none; }
+        #aue-panel #aue-progress-track { flex: 1; height: 4px; background: #444; border-radius: 2px; overflow: hidden; }
+        #aue-panel #aue-progress-bar { height: 100%; width: 0; background: #9ad; border-radius: 2px; transition: width 0.3s; }
         .aue-ship { font: 12px/1.4 -apple-system, "Segoe UI", sans-serif; color: #0a7a4b; }
       </style>
       <div id="aue-header"><span>AliExpress SuperDuper Ultra Search</span><span id="aue-toggle">–</span></div>
+      <label id="aue-enabled-row">Enabled <input type="checkbox" id="aue-enabled"></label>
       <div id="aue-counts"></div>
+      <div id="aue-progress" hidden>
+        <span>shipping</span>
+        <div id="aue-progress-track"><div id="aue-progress-bar"></div></div>
+        <span id="aue-progress-count"></span>
+      </div>
       <label>Match strictness
         <select id="aue-strictness">
           <option value="all">all words</option>
@@ -1027,6 +1097,8 @@
       <label>Hide sponsored <input type="checkbox" id="aue-ads"></label>
       <label>Sort by price <input type="checkbox" id="aue-sort"></label>
       <label>Add shipping to prices <input type="checkbox" id="aue-shipping"></label>
+      <label title='Treat "Free shipping over X" as free even when this item alone stays under X'>
+        Assume free-shipping limit met <input type="checkbox" id="aue-freelimit"></label>
       <label>Require words
         <input type="text" id="aue-include" placeholder="word &quot;a phrase&quot;">
       </label>
@@ -1040,16 +1112,30 @@
     document.body.appendChild(panel);
 
     const $ = (sel) => panel.querySelector(sel);
+    $('#aue-enabled').checked = settings.enabled;
+    panel.classList.toggle('aue-off', !settings.enabled);
     $('#aue-strictness').value = settings.strictness;
     $('#aue-mode').value = settings.mode;
     $('#aue-ads').checked = settings.hideSponsored;
     $('#aue-sort').checked = settings.sortByPrice;
     $('#aue-shipping').checked = settings.includeShipping;
+    $('#aue-freelimit').checked = settings.assumeFreeLimit;
     $('#aue-include').value = settings.includeTerms;
     $('#aue-exclude').value = settings.excludeTerms;
     $('#aue-min').value = settings.minPrice;
     $('#aue-max').value = settings.maxPrice;
 
+    $('#aue-enabled').addEventListener('change', (e) => {
+      settings.enabled = e.target.checked; saveSettings();
+      if (settings.enabled) {
+        panel.classList.remove('aue-off');
+        apply();
+      } else if (settings.sortByPrice) {
+        location.reload(); // restore the original result order
+      } else {
+        switchOff();
+      }
+    });
     $('#aue-header').addEventListener('click', () => {
       panel.classList.toggle('aue-collapsed');
       $('#aue-toggle').textContent = panel.classList.contains('aue-collapsed') ? '+' : '–';
@@ -1073,6 +1159,9 @@
     $('#aue-shipping').addEventListener('change', (e) => {
       settings.includeShipping = e.target.checked; saveSettings(); apply();
     });
+    $('#aue-freelimit').addEventListener('change', (e) => {
+      settings.assumeFreeLimit = e.target.checked; saveSettings(); apply();
+    });
     // 'change' fires on Enter or when the field loses focus
     $('#aue-include').addEventListener('change', (e) => {
       settings.includeTerms = e.target.value; saveSettings(); apply();
@@ -1093,7 +1182,7 @@
   let debounceTimer = null;
 
   function scheduleApply() {
-    if (mutatingOurselves) return;
+    if (mutatingOurselves || !settings.enabled) return;
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(apply, 400);
   }

@@ -35,12 +35,15 @@ instead — and does a lot more.
   and the price range. Free shipping is read straight off the card's own
   badge; otherwise the fee comes from the same product API the item page
   itself loads its data from. Only items that survive filtering are
-  requested — one at a time, spaced ~1s apart — and fees are cached for a
-  day per ship-to country and currency, so pagination and repeat searches
-  don't re-request them.
+  requested — one at a time, spaced ~1s apart, with a progress bar in the
+  panel while fees load — and fees are cached for a day per ship-to country
+  and currency, so pagination and repeat searches don't re-request them. The "Assume free-shipping limit met" toggle treats
+  "Free shipping over X" badges as free even when the item alone stays
+  under X — for orders that will reach it.
 - **Control panel** — bottom-left overlay with live counts
   ("37/60 shown · 12 off-topic · 10 ads · 1 dupes") and all settings, which
-  persist across searches and sessions.
+  persist across searches and sessions. An Enabled switch (AliExpress) turns
+  the whole script off and restores the page, without uninstalling.
 
 ## Good to know
 
